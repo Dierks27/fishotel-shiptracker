@@ -2,24 +2,14 @@
 /**
  * GitHub-based plugin auto-updater.
  *
- * Checks a public GitHub repository's releases for new versions and hooks
+ * Checks a public GitHub repository's tags for new versions and hooks
  * into the WordPress plugin update system so that updates appear on the
  * Plugins page and can be applied with one click.
  *
- * Usage:
- *   new FST_Updater( array(
- *       'slug'       => 'fishotel-shiptracker/fishotel-shiptracker.php',
- *       'repo'       => 'YourGitHubUser/fishotel-shiptracker',
- *       'version'    => FST_VERSION,
- *       'plugin_file'=> FST_PLUGIN_FILE,
- *   ) );
- *
- * Release workflow:
+ * Workflow:
  *   1. Bump the version in fishotel-shiptracker.php
- *   2. Commit, tag (e.g. v1.1.0), push tag
- *   3. On GitHub, create a Release from that tag and upload the plugin zip
- *      as a release asset (name it fishotel-shiptracker.zip)
- *   4. WordPress will detect the new version and offer the update
+ *   2. Commit, tag (e.g. v1.1.1), push with --tags
+ *   3. WordPress detects the new tag and offers the update — done.
  *
  * @package FisHotel_ShipTracker
  */
@@ -51,7 +41,7 @@ class FST_Updater {
      *
      * @param array $args {
      *     @type string $slug        Plugin basename.
-     *     @type string $repo        GitHub owner/repo (e.g. 'fishotel/fishotel-shiptracker').
+     *     @type string $repo        GitHub owner/repo.
      *     @type string $version     Current version string.
      *     @type string $plugin_file Absolute path to main plugin file.
      * }
@@ -72,7 +62,7 @@ class FST_Updater {
     }
 
     /**
-     * Check GitHub for a newer release and inject it into the update transient.
+     * Check GitHub for a newer tag and inject it into the update transient.
      *
      * @param object $transient
      * @return object
@@ -82,39 +72,34 @@ class FST_Updater {
             return $transient;
         }
 
-        $release = $this->get_latest_release();
+        $latest = $this->get_latest_tag();
 
-        if ( ! $release ) {
+        if ( ! $latest ) {
             return $transient;
         }
 
-        $remote_version = ltrim( $release['tag_name'], 'vV' );
+        $remote_version = ltrim( $latest['tag'], 'vV' );
 
         if ( version_compare( $remote_version, $this->version, '>' ) ) {
             $transient->response[ $this->slug ] = (object) array(
-                'slug'        => dirname( $this->slug ),
-                'plugin'      => $this->slug,
-                'new_version' => $remote_version,
-                'url'         => 'https://github.com/' . $this->repo,
-                'package'     => $release['zipball_url'],
-                'icons'       => array(),
-                'banners'     => array(),
-                'tested'      => '',
-                'requires'    => '5.8',
-                'requires_php'=> '7.4',
+                'slug'         => dirname( $this->slug ),
+                'plugin'       => $this->slug,
+                'new_version'  => $remote_version,
+                'url'          => 'https://github.com/' . $this->repo,
+                'package'      => $latest['zipball_url'],
+                'icons'        => array(),
+                'banners'      => array(),
+                'tested'       => '',
+                'requires'     => '5.8',
+                'requires_php' => '7.4',
             );
-
-            // Prefer the uploaded zip asset over GitHub's zipball if available.
-            if ( ! empty( $release['asset_url'] ) ) {
-                $transient->response[ $this->slug ]->package = $release['asset_url'];
-            }
         }
 
         return $transient;
     }
 
     /**
-     * Provide plugin info for the "View Details" popup in Plugins > Updates.
+     * Provide plugin info for the "View Details" popup.
      *
      * @param false|object|array $result
      * @param string             $action
@@ -130,41 +115,36 @@ class FST_Updater {
             return $result;
         }
 
-        $release = $this->get_latest_release();
+        $latest = $this->get_latest_tag();
 
-        if ( ! $release ) {
+        if ( ! $latest ) {
             return $result;
         }
 
-        $remote_version = ltrim( $release['tag_name'], 'vV' );
+        $remote_version = ltrim( $latest['tag'], 'vV' );
+        $plugin_data    = get_plugin_data( $this->plugin_file );
 
-        $plugin_data = get_plugin_data( $this->plugin_file );
-
-        $info = (object) array(
-            'name'            => $plugin_data['Name'],
-            'slug'            => dirname( $this->slug ),
-            'version'         => $remote_version,
-            'author'          => $plugin_data['Author'],
-            'homepage'        => $plugin_data['PluginURI'],
-            'requires'        => '5.8',
-            'requires_php'    => '7.4',
-            'tested'          => '',
-            'download_link'   => ! empty( $release['asset_url'] ) ? $release['asset_url'] : $release['zipball_url'],
-            'sections'        => array(
-                'description'  => $plugin_data['Description'],
-                'changelog'    => nl2br( esc_html( $release['body'] ) ),
+        return (object) array(
+            'name'          => $plugin_data['Name'],
+            'slug'          => dirname( $this->slug ),
+            'version'       => $remote_version,
+            'author'        => $plugin_data['Author'],
+            'homepage'      => $plugin_data['PluginURI'],
+            'requires'      => '5.8',
+            'requires_php'  => '7.4',
+            'tested'        => '',
+            'download_link' => $latest['zipball_url'],
+            'sections'      => array(
+                'description' => $plugin_data['Description'],
+                'changelog'   => '<p>See <a href="https://github.com/' . esc_attr( $this->repo ) . '/releases">GitHub releases</a> for details.</p>',
             ),
-            'last_updated'    => $release['published_at'],
         );
-
-        return $info;
     }
 
     /**
      * After install, rename the extracted folder to match the expected plugin directory name.
      *
      * GitHub zipballs extract to `owner-repo-hash/` which WordPress won't recognize.
-     * We rename it to the correct plugin folder name.
      *
      * @param bool  $response
      * @param array $hook_extra
@@ -189,24 +169,22 @@ class FST_Updater {
     }
 
     /**
-     * Fetch the latest release from GitHub (cached).
+     * Fetch the latest version tag from GitHub (cached).
      *
-     * @return array|false {
-     *     @type string $tag_name      e.g. 'v1.1.0'
-     *     @type string $body          Release description / changelog.
-     *     @type string $zipball_url   GitHub-generated source zip.
-     *     @type string $asset_url     Uploaded zip asset URL (preferred).
-     *     @type string $published_at  ISO 8601 date.
-     * }
+     * Uses the /repos/{owner}/{repo}/tags endpoint which returns tags
+     * sorted by most recent first. Finds the highest semver tag.
+     *
+     * @return array|false { 'tag' => 'v1.1.0', 'zipball_url' => '...' }
      */
-    private function get_latest_release() {
+    private function get_latest_tag() {
         $cached = get_transient( $this->cache_key );
 
         if ( false !== $cached ) {
-            return $cached;
+            // Empty array = cached failure.
+            return ! empty( $cached ) ? $cached : false;
         }
 
-        $url = sprintf( 'https://api.github.com/repos/%s/releases/latest', $this->repo );
+        $url = sprintf( 'https://api.github.com/repos/%s/tags?per_page=10', $this->repo );
 
         $response = wp_remote_get( $url, array(
             'headers' => array(
@@ -222,39 +200,50 @@ class FST_Updater {
             return false;
         }
 
-        $body = json_decode( wp_remote_retrieve_body( $response ), true );
+        $tags = json_decode( wp_remote_retrieve_body( $response ), true );
 
-        if ( empty( $body['tag_name'] ) ) {
+        if ( empty( $tags ) || ! is_array( $tags ) ) {
             set_transient( $this->cache_key, array(), 1800 );
             return false;
         }
 
-        // Look for an uploaded .zip asset (preferred over zipball).
-        $asset_url = '';
-        if ( ! empty( $body['assets'] ) ) {
-            foreach ( $body['assets'] as $asset ) {
-                if ( '.zip' === substr( $asset['name'], -4 ) ) {
-                    $asset_url = $asset['browser_download_url'];
-                    break;
-                }
+        // Find the highest semver tag.
+        $best         = null;
+        $best_version = '0.0.0';
+
+        foreach ( $tags as $tag ) {
+            if ( empty( $tag['name'] ) ) {
+                continue;
+            }
+
+            $ver = ltrim( $tag['name'], 'vV' );
+
+            // Only consider tags that look like version numbers.
+            if ( ! preg_match( '/^\d+\.\d+/', $ver ) ) {
+                continue;
+            }
+
+            if ( version_compare( $ver, $best_version, '>' ) ) {
+                $best_version = $ver;
+                $best = array(
+                    'tag'         => $tag['name'],
+                    'zipball_url' => $tag['zipball_url'],
+                );
             }
         }
 
-        $release = array(
-            'tag_name'     => $body['tag_name'],
-            'body'         => isset( $body['body'] ) ? $body['body'] : '',
-            'zipball_url'  => $body['zipball_url'],
-            'asset_url'    => $asset_url,
-            'published_at' => isset( $body['published_at'] ) ? $body['published_at'] : '',
-        );
+        if ( ! $best ) {
+            set_transient( $this->cache_key, array(), 1800 );
+            return false;
+        }
 
-        set_transient( $this->cache_key, $release, $this->cache_ttl );
+        set_transient( $this->cache_key, $best, $this->cache_ttl );
 
-        return $release;
+        return $best;
     }
 
     /**
-     * Clear the cached release data.
+     * Clear the cached tag data.
      */
     public function clear_cache() {
         delete_transient( $this->cache_key );
