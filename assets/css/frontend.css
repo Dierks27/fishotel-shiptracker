@@ -1,0 +1,334 @@
+/**
+ * FisHotel ShipTracker — Frontend Tracking Styles
+ *
+ * Branded tracking display for My Account order views
+ * and the Thank You page.
+ */
+
+/* =============================================
+   TRACKING SECTION WRAPPER
+   ============================================= */
+.fst-tracking-section {
+    margin: 2em 0;
+}
+
+.fst-tracking-section > h2 {
+    font-size: 1.4em;
+    font-weight: 600;
+    margin-bottom: 1em;
+    padding-bottom: 0.5em;
+    border-bottom: 2px solid #e0e0e0;
+    color: #333;
+}
+
+/* =============================================
+   SHIPMENT CARD
+   ============================================= */
+.fst-shipment-card {
+    background: #ffffff;
+    border: 1px solid #e0e0e0;
+    border-radius: 8px;
+    margin-bottom: 1.5em;
+    overflow: hidden;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+}
+
+.fst-shipment-card__header-label {
+    background: #f5f5f5;
+    padding: 8px 20px;
+    font-size: 0.85em;
+    font-weight: 600;
+    color: #666;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    border-bottom: 1px solid #e0e0e0;
+}
+
+/* =============================================
+   STATUS HEADER
+   ============================================= */
+.fst-shipment-card__status {
+    padding: 20px;
+    border-bottom: 1px solid #f0f0f0;
+}
+
+.fst-shipment-card__status-badge {
+    display: inline-block;
+    padding: 6px 16px;
+    border-radius: 20px;
+    font-size: 0.9em;
+    font-weight: 600;
+    color: #fff;
+    background: var(--fst-status-color, #999);
+}
+
+.fst-shipment-card__status-detail {
+    margin-top: 8px;
+    font-size: 0.9em;
+    color: #666;
+}
+
+/* =============================================
+   INFO ROWS
+   ============================================= */
+.fst-shipment-card__info {
+    padding: 16px 20px;
+    border-bottom: 1px solid #f0f0f0;
+}
+
+.fst-shipment-card__info-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 6px 0;
+}
+
+.fst-shipment-card__info-row + .fst-shipment-card__info-row {
+    border-top: 1px solid #f7f7f7;
+}
+
+.fst-shipment-card__label {
+    font-size: 0.85em;
+    color: #888;
+    font-weight: 500;
+    flex-shrink: 0;
+    margin-right: 12px;
+}
+
+.fst-shipment-card__value {
+    font-size: 0.9em;
+    color: #333;
+    font-weight: 500;
+    text-align: right;
+}
+
+.fst-shipment-card__value a {
+    color: #007cba;
+    text-decoration: none;
+    font-family: monospace;
+    font-size: 0.95em;
+}
+
+.fst-shipment-card__value a:hover {
+    text-decoration: underline;
+}
+
+.fst-delivered-highlight {
+    color: #2e7d32;
+    font-weight: 600;
+}
+
+/* =============================================
+   PROGRESS BAR
+   ============================================= */
+.fst-progress-bar {
+    display: flex;
+    justify-content: space-between;
+    padding: 24px 20px;
+    border-bottom: 1px solid #f0f0f0;
+    position: relative;
+}
+
+/* Connecting line behind the dots */
+.fst-progress-bar::before {
+    content: '';
+    position: absolute;
+    top: 36px;
+    left: 40px;
+    right: 40px;
+    height: 3px;
+    background: #e0e0e0;
+    z-index: 0;
+}
+
+.fst-progress-bar__step {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    position: relative;
+    z-index: 1;
+    flex: 1;
+}
+
+.fst-progress-bar__dot {
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    background: #e0e0e0;
+    border: 3px solid #fff;
+    box-shadow: 0 0 0 2px #e0e0e0;
+    transition: all 0.3s ease;
+    margin-bottom: 8px;
+}
+
+.fst-progress-bar__step--done .fst-progress-bar__dot {
+    background: var(--fst-status-color, #007cba);
+    box-shadow: 0 0 0 2px var(--fst-status-color, #007cba);
+}
+
+.fst-progress-bar__step--active .fst-progress-bar__dot {
+    background: var(--fst-status-color, #007cba);
+    box-shadow: 0 0 0 2px var(--fst-status-color, #007cba), 0 0 0 6px rgba(0, 124, 186, 0.15);
+    transform: scale(1.15);
+}
+
+.fst-progress-bar__label {
+    font-size: 0.72em;
+    color: #aaa;
+    text-align: center;
+    font-weight: 500;
+    white-space: nowrap;
+}
+
+.fst-progress-bar__step--done .fst-progress-bar__label {
+    color: #555;
+    font-weight: 600;
+}
+
+.fst-progress-bar__step--active .fst-progress-bar__label {
+    color: var(--fst-status-color, #007cba);
+    font-weight: 700;
+}
+
+/* =============================================
+   TRACKING TIMELINE
+   ============================================= */
+.fst-timeline {
+    padding: 20px;
+}
+
+.fst-timeline__heading {
+    font-size: 1em;
+    font-weight: 600;
+    color: #444;
+    margin: 0 0 16px;
+}
+
+.fst-timeline__list {
+    position: relative;
+    padding-left: 28px;
+}
+
+/* Vertical line */
+.fst-timeline__list::before {
+    content: '';
+    position: absolute;
+    left: 7px;
+    top: 4px;
+    bottom: 4px;
+    width: 2px;
+    background: #e0e0e0;
+}
+
+.fst-timeline__event {
+    position: relative;
+    padding-bottom: 16px;
+}
+
+.fst-timeline__event:last-child {
+    padding-bottom: 0;
+}
+
+.fst-timeline__dot {
+    position: absolute;
+    left: -24px;
+    top: 4px;
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background: #ccc;
+    border: 2px solid #fff;
+    z-index: 1;
+}
+
+.fst-timeline__event:first-child .fst-timeline__dot {
+    background: #007cba;
+    width: 14px;
+    height: 14px;
+    left: -25px;
+    top: 3px;
+}
+
+.fst-timeline__description {
+    font-size: 0.9em;
+    color: #333;
+    font-weight: 500;
+    line-height: 1.4;
+}
+
+.fst-timeline__meta {
+    font-size: 0.8em;
+    color: #999;
+    margin-top: 2px;
+}
+
+.fst-timeline__separator {
+    margin: 0 6px;
+}
+
+.fst-timeline__location {
+    color: #888;
+}
+
+.fst-timeline__time {
+    color: #aaa;
+}
+
+/* =============================================
+   CARD FOOTER / CTA BUTTON
+   ============================================= */
+.fst-shipment-card__footer {
+    padding: 16px 20px;
+    text-align: center;
+    background: #fafafa;
+}
+
+.fst-btn {
+    display: inline-block;
+    padding: 8px 24px;
+    font-size: 0.85em;
+    font-weight: 600;
+    text-decoration: none;
+    border-radius: 5px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.fst-btn--outline {
+    color: #007cba;
+    border: 1px solid #007cba;
+    background: transparent;
+}
+
+.fst-btn--outline:hover {
+    background: #007cba;
+    color: #fff;
+}
+
+/* =============================================
+   RESPONSIVE
+   ============================================= */
+@media (max-width: 600px) {
+    .fst-shipment-card__info-row {
+        flex-direction: column;
+        align-items: flex-start;
+    }
+
+    .fst-shipment-card__value {
+        text-align: left;
+        margin-top: 2px;
+    }
+
+    .fst-progress-bar__label {
+        font-size: 0.65em;
+    }
+
+    .fst-progress-bar {
+        padding: 20px 12px;
+    }
+
+    .fst-progress-bar::before {
+        left: 24px;
+        right: 24px;
+    }
+}
