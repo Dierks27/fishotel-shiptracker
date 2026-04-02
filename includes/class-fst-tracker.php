@@ -207,6 +207,12 @@ class FST_Tracker {
         $templates = get_option( 'fst_email_templates', array() );
         $template  = isset( $templates[ $status ] ) ? $templates[ $status ] : null;
 
+        // Fall back to defaults if no custom template is set.
+        if ( ! $template || empty( $template['subject'] ) || empty( $template['body'] ) ) {
+            $defaults = FST_Email::get_defaults();
+            $template = isset( $defaults[ $status ] ) ? $defaults[ $status ] : null;
+        }
+
         if ( ! $template || empty( $template['subject'] ) || empty( $template['body'] ) ) {
             $this->log( sprintf( 'No email template for status: %s', $status ) );
             return;
@@ -219,10 +225,8 @@ class FST_Tracker {
             $subject = '[Admin] ' . $subject;
         }
 
-        // Wrap in basic HTML.
-        $html_body = '<html><body style="font-family: Arial, sans-serif; line-height: 1.6;">';
-        $html_body .= nl2br( $body );
-        $html_body .= '</body></html>';
+        // Convert newlines to <br> and wrap in branded HTML template.
+        $html_body = FST_Email::wrap( nl2br( $body ), $status );
 
         $headers = array( 'Content-Type: text/html; charset=UTF-8' );
 
@@ -239,22 +243,26 @@ class FST_Tracker {
      * @return string
      */
     public function replace_shortcodes( $template, $shipment, $order ) {
-        $carrier = $this->get_carrier_instance( $shipment->carrier );
+        $carrier     = $this->get_carrier_instance( $shipment->carrier );
+        $carrier_url = $carrier ? $carrier->get_tracking_url( $shipment->tracking_number ) : '';
+        $accent      = FST_Carrier::get_status_color( $shipment->status );
 
         $replacements = array(
             '{tracking_number}'      => $shipment->tracking_number,
             '{carrier}'              => strtoupper( $shipment->carrier ),
             '{tracking_url}'         => home_url( '/shipment-tracking/?tracking=' . urlencode( $shipment->tracking_number ) ),
-            '{carrier_tracking_url}' => $carrier ? $carrier->get_tracking_url( $shipment->tracking_number ) : '',
+            '{carrier_tracking_url}' => $carrier_url,
             '{status}'               => FST_Carrier::get_status_label( $shipment->status ),
             '{status_detail}'        => $shipment->status_detail ?? '',
             '{est_delivery}'         => $shipment->est_delivery ? date_i18n( get_option( 'date_format' ), strtotime( $shipment->est_delivery ) ) : 'TBD',
             '{ship_date}'            => $shipment->ship_date ? date_i18n( get_option( 'date_format' ), strtotime( $shipment->ship_date ) ) : '',
             '{order_number}'         => $order->get_order_number(),
             '{customer_name}'        => $order->get_billing_first_name(),
-            '{tracking_timeline}'    => '', // TODO: Phase 2 — HTML progress bar widget.
-            '{order_summary}'        => '', // TODO: Phase 2 — HTML order items widget.
-            '{tracking_events}'      => '', // TODO: Phase 2 — HTML events list widget.
+            '{tracking_progress}'    => FST_Email::render_progress_bar( $shipment->status ),
+            '{tracking_timeline}'    => FST_Email::render_progress_bar( $shipment->status ),
+            '{tracking_events}'      => FST_Email::render_events( $shipment->id ),
+            '{order_summary}'        => FST_Email::render_order_summary( $order ),
+            '{track_button}'         => FST_Email::render_track_button( $carrier_url ?: '', 'Track Your Package', $accent ),
         );
 
         return str_replace( array_keys( $replacements ), array_values( $replacements ), $template );

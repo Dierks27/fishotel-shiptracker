@@ -3,7 +3,7 @@
  * Plugin Name: FisHotel ShipTracker
  * Plugin URI: https://fishotel.com
  * Description: Self-hosted shipment tracking for WooCommerce. Tracks UPS & USPS packages, sends automated email notifications, and provides a branded tracking page for customers.
- * Version: 1.1.2
+ * Version: 1.2.0
  * Author: FisHotel
  * Author URI: https://fishotel.com
  * Text Domain: fishotel-shiptracker
@@ -19,7 +19,7 @@
 defined( 'ABSPATH' ) || exit;
 
 // Plugin constants
-define( 'FST_VERSION', '1.1.2' );
+define( 'FST_VERSION', '1.2.0' );
 define( 'FST_DB_VERSION', '1.0.0' );
 define( 'FST_PLUGIN_FILE', __FILE__ );
 define( 'FST_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
@@ -102,6 +102,7 @@ final class FisHotel_ShipTracker {
         require_once FST_PLUGIN_DIR . 'includes/class-fst-settings.php';
         require_once FST_PLUGIN_DIR . 'includes/class-fst-rest-api.php';
         require_once FST_PLUGIN_DIR . 'includes/class-fst-migrator.php';
+        require_once FST_PLUGIN_DIR . 'includes/class-fst-email.php';
         require_once FST_PLUGIN_DIR . 'includes/class-fst-myaccount.php';
         require_once FST_PLUGIN_DIR . 'includes/class-fst-updater.php';
 
@@ -141,6 +142,9 @@ final class FisHotel_ShipTracker {
         // Migration AJAX handlers.
         add_action( 'wp_ajax_fst_migration_scan', array( $this, 'ajax_migration_scan' ) );
         add_action( 'wp_ajax_fst_migration_import', array( $this, 'ajax_migration_import' ) );
+
+        // Test email AJAX handler.
+        add_action( 'wp_ajax_fst_send_test_email', array( $this, 'ajax_send_test_email' ) );
 
         // GitHub auto-updater.
         new FST_Updater( array(
@@ -281,6 +285,59 @@ final class FisHotel_ShipTracker {
 
         $results = FST_Migrator::scan();
         wp_send_json_success( $results );
+    }
+
+    /**
+     * AJAX: Send a test email to the admin.
+     */
+    public function ajax_send_test_email() {
+        check_ajax_referer( 'fst_nonce', 'nonce' );
+
+        if ( ! current_user_can( 'manage_woocommerce' ) ) {
+            wp_send_json_error( array( 'message' => 'Unauthorized' ), 403 );
+        }
+
+        $to = get_option( 'admin_email' );
+
+        // Build a sample body using the default "in_transit" template.
+        $defaults = FST_Email::get_defaults();
+        $template = $defaults['in_transit'];
+
+        // Replace shortcodes with sample data.
+        $sample_replacements = array(
+            '{customer_name}'        => 'John',
+            '{order_number}'         => '12345',
+            '{tracking_number}'      => '1Z999AA10123456784',
+            '{carrier}'              => 'UPS',
+            '{status}'               => 'In Transit',
+            '{status_detail}'        => 'Package is moving through the UPS network',
+            '{est_delivery}'         => date_i18n( get_option( 'date_format' ), strtotime( '+2 days' ) ),
+            '{ship_date}'            => date_i18n( get_option( 'date_format' ), strtotime( '-1 day' ) ),
+            '{carrier_tracking_url}' => 'https://www.ups.com/track?tracknum=1Z999AA10123456784',
+            '{tracking_progress}'    => FST_Email::render_progress_bar( 'in_transit' ),
+            '{tracking_events}'      => '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:16px 0;border:1px solid #eee;border-radius:6px;overflow:hidden;">'
+                . '<tr><td style="background:#f9f9f9;padding:10px 16px;font-size:13px;font-weight:600;color:#444;border-bottom:1px solid #eee;">Recent Tracking Updates</td></tr>'
+                . '<tr><td style="padding:10px 16px;border-bottom:1px solid #f0f0f0;"><div style="font-size:13px;color:#333;font-weight:500;">Departed facility</div><div style="font-size:11px;color:#999;margin-top:2px;">Louisville, KY &middot; ' . date_i18n( get_option( 'date_format' ) . ' ' . get_option( 'time_format' ) ) . '</div></td></tr>'
+                . '<tr><td style="padding:10px 16px;"><div style="font-size:13px;color:#333;font-weight:500;">Arrived at facility</div><div style="font-size:11px;color:#999;margin-top:2px;">Memphis, TN &middot; ' . date_i18n( get_option( 'date_format' ) . ' ' . get_option( 'time_format' ), strtotime( '-4 hours' ) ) . '</div></td></tr>'
+                . '</table>',
+            '{order_summary}'        => '',
+            '{track_button}'         => FST_Email::render_track_button( 'https://www.ups.com/track?tracknum=1Z999AA10123456784', 'Track Your Package', '#2196f3' ),
+        );
+
+        $subject = str_replace( array_keys( $sample_replacements ), array_values( $sample_replacements ), $template['subject'] );
+        $body    = str_replace( array_keys( $sample_replacements ), array_values( $sample_replacements ), $template['body'] );
+
+        $subject = '[TEST] ' . $subject;
+        $html    = FST_Email::wrap( nl2br( $body ), 'in_transit' );
+
+        $headers = array( 'Content-Type: text/html; charset=UTF-8' );
+        $sent    = wp_mail( $to, $subject, $html, $headers );
+
+        if ( $sent ) {
+            wp_send_json_success( array( 'message' => 'Test email sent to ' . $to ) );
+        } else {
+            wp_send_json_error( array( 'message' => 'wp_mail() failed. Check your email configuration.' ) );
+        }
     }
 
     /**

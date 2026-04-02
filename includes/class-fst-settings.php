@@ -267,13 +267,15 @@ class FST_Settings {
      */
     private function render_status_actions_tab() {
         $statuses = array(
-            'pending'          => 'Pending',
-            'shipped'          => 'Shipped',
-            'in_transit'       => 'In Transit',
-            'out_for_delivery' => 'Out for Delivery',
-            'delivered'        => 'Delivered',
-            'exception'        => 'Exception',
-            'returned'         => 'Returned',
+            'label_created'        => 'Label Created',
+            'pre_transit'          => 'Pre-Transit',
+            'in_transit'           => 'In Transit',
+            'out_for_delivery'     => 'Out for Delivery',
+            'delivered'            => 'Delivered',
+            'exception'            => 'Exception',
+            'available_for_pickup' => 'Available for Pickup',
+            'return_to_sender'     => 'Return to Sender',
+            'failure'              => 'Delivery Failed',
         );
 
         $status_actions = get_option( 'fst_status_actions', array() );
@@ -329,58 +331,118 @@ class FST_Settings {
      */
     private function render_email_tab() {
         $statuses = array(
-            'pending'          => 'Pending',
-            'shipped'          => 'Shipped',
-            'in_transit'       => 'In Transit',
-            'out_for_delivery' => 'Out for Delivery',
-            'delivered'        => 'Delivered',
-            'exception'        => 'Exception',
-            'returned'         => 'Returned',
+            'label_created'        => 'Label Created',
+            'pre_transit'          => 'Pre-Transit',
+            'in_transit'           => 'In Transit',
+            'out_for_delivery'     => 'Out for Delivery',
+            'delivered'            => 'Delivered',
+            'exception'            => 'Exception',
+            'available_for_pickup' => 'Available for Pickup',
+            'return_to_sender'     => 'Return to Sender',
+            'failure'              => 'Delivery Failed',
         );
 
         $email_templates = get_option( 'fst_email_templates', array() );
+        $defaults        = FST_Email::get_defaults();
 
         ?>
-        <p><?php esc_html_e( 'Available shortcodes:', 'fishotel-shiptracker' ); ?></p>
-        <ul style="margin-left: 20px; margin-bottom: 20px;">
-            <li><code>{tracking_number}</code> - <?php esc_html_e( 'Tracking number', 'fishotel-shiptracker' ); ?></li>
-            <li><code>{carrier}</code> - <?php esc_html_e( 'Carrier name', 'fishotel-shiptracker' ); ?></li>
-            <li><code>{tracking_url}</code> - <?php esc_html_e( 'Plugin tracking URL', 'fishotel-shiptracker' ); ?></li>
-            <li><code>{carrier_tracking_url}</code> - <?php esc_html_e( 'Carrier tracking URL', 'fishotel-shiptracker' ); ?></li>
-            <li><code>{status}</code> - <?php esc_html_e( 'Current status', 'fishotel-shiptracker' ); ?></li>
-            <li><code>{status_detail}</code> - <?php esc_html_e( 'Status details', 'fishotel-shiptracker' ); ?></li>
-            <li><code>{est_delivery}</code> - <?php esc_html_e( 'Estimated delivery date', 'fishotel-shiptracker' ); ?></li>
-            <li><code>{ship_date}</code> - <?php esc_html_e( 'Ship date', 'fishotel-shiptracker' ); ?></li>
-            <li><code>{order_number}</code> - <?php esc_html_e( 'Order number', 'fishotel-shiptracker' ); ?></li>
-            <li><code>{customer_name}</code> - <?php esc_html_e( 'Customer name', 'fishotel-shiptracker' ); ?></li>
-        </ul>
+        <div style="background: #fff; border: 1px solid #ccd0d4; border-left: 4px solid #007cba; padding: 14px 18px; margin-bottom: 20px;">
+            <p style="margin: 0 0 10px; font-weight: 600;"><?php esc_html_e( 'Available Shortcodes', 'fishotel-shiptracker' ); ?></p>
+            <div style="display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 13px;">
+                <code>{customer_name}</code>
+                <code>{order_number}</code>
+                <code>{tracking_number}</code>
+                <code>{carrier}</code>
+                <code>{status}</code>
+                <code>{status_detail}</code>
+                <code>{est_delivery}</code>
+                <code>{ship_date}</code>
+                <code>{carrier_tracking_url}</code>
+            </div>
+            <p style="margin: 10px 0 0; font-weight: 600;"><?php esc_html_e( 'Widget Shortcodes (auto-render HTML)', 'fishotel-shiptracker' ); ?></p>
+            <div style="display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 13px;">
+                <span><code>{tracking_progress}</code> — <?php esc_html_e( 'Visual progress bar', 'fishotel-shiptracker' ); ?></span>
+                <span><code>{tracking_events}</code> — <?php esc_html_e( 'Recent tracking updates', 'fishotel-shiptracker' ); ?></span>
+                <span><code>{order_summary}</code> — <?php esc_html_e( 'Order items &amp; total', 'fishotel-shiptracker' ); ?></span>
+                <span><code>{track_button}</code> — <?php esc_html_e( 'Track on carrier site button', 'fishotel-shiptracker' ); ?></span>
+            </div>
+        </div>
 
-        <?php foreach ( $statuses as $status_key => $status_label ) { ?>
-            <?php
-                $template = isset( $email_templates[ $status_key ] ) ? $email_templates[ $status_key ] : array();
-                $subject  = isset( $template['subject'] ) ? $template['subject'] : '';
-                $body     = isset( $template['body'] ) ? $template['body'] : '';
-            ?>
-            <h3><?php echo esc_html( $status_label ); ?></h3>
-            <table class="form-table">
-                <tr>
-                    <th scope="row">
-                        <label for="fst_email_subject_<?php echo esc_attr( $status_key ); ?>"><?php esc_html_e( 'Subject', 'fishotel-shiptracker' ); ?></label>
-                    </th>
-                    <td>
-                        <input type="text" id="fst_email_subject_<?php echo esc_attr( $status_key ); ?>" name="fst_email_templates[<?php echo esc_attr( $status_key ); ?>][subject]" value="<?php echo esc_attr( $subject ); ?>" class="large-text">
-                    </td>
-                </tr>
-                <tr>
-                    <th scope="row">
-                        <label for="fst_email_body_<?php echo esc_attr( $status_key ); ?>"><?php esc_html_e( 'Body', 'fishotel-shiptracker' ); ?></label>
-                    </th>
-                    <td>
-                        <textarea id="fst_email_body_<?php echo esc_attr( $status_key ); ?>" name="fst_email_templates[<?php echo esc_attr( $status_key ); ?>][body]" rows="5" class="large-text"><?php echo esc_textarea( $body ); ?></textarea>
-                    </td>
-                </tr>
-            </table>
+        <p style="margin-bottom: 8px;">
+            <button type="button" class="button" id="fst-send-test-email">
+                <?php esc_html_e( 'Send Test Email', 'fishotel-shiptracker' ); ?>
+            </button>
+            <span style="color: #666; font-size: 13px; margin-left: 8px;">
+                <?php printf( esc_html__( 'Sends a sample "In Transit" email to %s', 'fishotel-shiptracker' ), esc_html( get_option( 'admin_email' ) ) ); ?>
+            </span>
+            <span id="fst-test-email-status" style="margin-left: 8px;"></span>
+        </p>
+
+        <?php foreach ( $statuses as $status_key => $status_label ) {
+            $template = isset( $email_templates[ $status_key ] ) ? $email_templates[ $status_key ] : array();
+            $default  = isset( $defaults[ $status_key ] ) ? $defaults[ $status_key ] : array();
+            $subject  = isset( $template['subject'] ) && '' !== $template['subject'] ? $template['subject'] : '';
+            $body     = isset( $template['body'] ) && '' !== $template['body'] ? $template['body'] : '';
+            $def_subj = isset( $default['subject'] ) ? $default['subject'] : '';
+            $def_body = isset( $default['body'] ) ? $default['body'] : '';
+            $color    = FST_Carrier::get_status_color( $status_key );
+        ?>
+            <div style="border-left: 3px solid <?php echo esc_attr( $color ); ?>; padding-left: 16px; margin: 24px 0;">
+                <h3 style="margin: 0 0 8px; color: <?php echo esc_attr( $color ); ?>;"><?php echo esc_html( $status_label ); ?></h3>
+                <table class="form-table" style="margin-top: 0;">
+                    <tr>
+                        <th scope="row" style="width: 80px;">
+                            <label for="fst_email_subject_<?php echo esc_attr( $status_key ); ?>"><?php esc_html_e( 'Subject', 'fishotel-shiptracker' ); ?></label>
+                        </th>
+                        <td>
+                            <input type="text" id="fst_email_subject_<?php echo esc_attr( $status_key ); ?>"
+                                   name="fst_email_templates[<?php echo esc_attr( $status_key ); ?>][subject]"
+                                   value="<?php echo esc_attr( $subject ); ?>"
+                                   placeholder="<?php echo esc_attr( $def_subj ); ?>"
+                                   class="large-text">
+                        </td>
+                    </tr>
+                    <tr>
+                        <th scope="row">
+                            <label for="fst_email_body_<?php echo esc_attr( $status_key ); ?>"><?php esc_html_e( 'Body', 'fishotel-shiptracker' ); ?></label>
+                        </th>
+                        <td>
+                            <textarea id="fst_email_body_<?php echo esc_attr( $status_key ); ?>"
+                                      name="fst_email_templates[<?php echo esc_attr( $status_key ); ?>][body]"
+                                      rows="6" class="large-text"
+                                      placeholder="<?php echo esc_attr( $def_body ); ?>"><?php echo esc_textarea( $body ); ?></textarea>
+                            <p class="description"><?php esc_html_e( 'Leave blank to use the built-in default template.', 'fishotel-shiptracker' ); ?></p>
+                        </td>
+                    </tr>
+                </table>
+            </div>
         <?php } ?>
+
+        <script>
+        jQuery(function($) {
+            $('#fst-send-test-email').on('click', function() {
+                var $btn    = $(this);
+                var $status = $('#fst-test-email-status');
+                $btn.prop('disabled', true);
+                $status.html('<span style="color:#666;">Sending...</span>');
+
+                $.post(fst_admin.ajax_url, {
+                    action: 'fst_send_test_email',
+                    nonce: fst_admin.nonce
+                }, function(response) {
+                    $btn.prop('disabled', false);
+                    if (response.success) {
+                        $status.html('<span style="color:#2e7d32;">&#10003; Test email sent!</span>');
+                    } else {
+                        $status.html('<span style="color:#d63638;">&#10007; ' + (response.data.message || 'Failed') + '</span>');
+                    }
+                }).fail(function() {
+                    $btn.prop('disabled', false);
+                    $status.html('<span style="color:#d63638;">&#10007; Request failed</span>');
+                });
+            });
+        });
+        </script>
         <?php
     }
 
