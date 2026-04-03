@@ -3,7 +3,7 @@
  * Plugin Name: FisHotel ShipTracker
  * Plugin URI: https://fishotel.com
  * Description: Self-hosted shipment tracking for WooCommerce. Tracks UPS & USPS packages, sends automated email notifications, and provides a branded tracking page for customers.
- * Version: 1.2.0
+ * Version: 1.2.1
  * Author: FisHotel
  * Author URI: https://fishotel.com
  * Text Domain: fishotel-shiptracker
@@ -19,7 +19,7 @@
 defined( 'ABSPATH' ) || exit;
 
 // Plugin constants
-define( 'FST_VERSION', '1.2.0' );
+define( 'FST_VERSION', '1.2.1' );
 define( 'FST_DB_VERSION', '1.0.0' );
 define( 'FST_PLUGIN_FILE', __FILE__ );
 define( 'FST_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
@@ -145,6 +145,9 @@ final class FisHotel_ShipTracker {
 
         // Test email AJAX handler.
         add_action( 'wp_ajax_fst_send_test_email', array( $this, 'ajax_send_test_email' ) );
+
+        // Test carrier connection AJAX handlers.
+        add_action( 'wp_ajax_fst_test_carrier', array( $this, 'ajax_test_carrier' ) );
 
         // GitHub auto-updater.
         new FST_Updater( array(
@@ -337,6 +340,44 @@ final class FisHotel_ShipTracker {
             wp_send_json_success( array( 'message' => 'Test email sent to ' . $to ) );
         } else {
             wp_send_json_error( array( 'message' => 'wp_mail() failed. Check your email configuration.' ) );
+        }
+    }
+
+    /**
+     * AJAX: Test a carrier API connection.
+     */
+    public function ajax_test_carrier() {
+        check_ajax_referer( 'fst_nonce', 'nonce' );
+
+        if ( ! current_user_can( 'manage_woocommerce' ) ) {
+            wp_send_json_error( array( 'message' => 'Unauthorized' ), 403 );
+        }
+
+        $carrier = sanitize_text_field( $_POST['carrier'] ?? '' );
+
+        if ( 'ups' === $carrier ) {
+            // Clear any cached token so we test fresh credentials.
+            delete_transient( 'fst_ups_access_token' );
+            $carrier_obj = new FST_Carrier_UPS();
+            $result = $carrier_obj->get_access_token();
+
+            if ( is_wp_error( $result ) ) {
+                wp_send_json_error( array( 'message' => $result->get_error_message() ) );
+            }
+            wp_send_json_success( array( 'message' => 'UPS connection successful! OAuth token obtained.' ) );
+
+        } elseif ( 'usps' === $carrier ) {
+            delete_transient( 'fst_usps_access_token' );
+            $carrier_obj = new FST_Carrier_USPS();
+            $result = $carrier_obj->get_access_token();
+
+            if ( is_wp_error( $result ) ) {
+                wp_send_json_error( array( 'message' => $result->get_error_message() ) );
+            }
+            wp_send_json_success( array( 'message' => 'USPS connection successful! OAuth token obtained.' ) );
+
+        } else {
+            wp_send_json_error( array( 'message' => 'Unknown carrier.' ) );
         }
     }
 

@@ -31,6 +31,13 @@
 
 			// Tab switching on settings page
 			$(document).on('click', '.fst-tabs .nav-tab', $.proxy(this.switchTab, this));
+
+			// Test carrier connection buttons
+			$(document).on('click', '#fst_test_ups', $.proxy(function () { this.testCarrier('ups', '#fst_test_ups'); }, this));
+			$(document).on('click', '#fst_test_usps', $.proxy(function () { this.testCarrier('usps', '#fst_test_usps'); }, this));
+
+			// Send test email button
+			$(document).on('click', '#fst_send_test_email', $.proxy(this.sendTestEmail, this));
 		},
 
 		/**
@@ -101,7 +108,7 @@
 			}
 
 			var button = $(e.currentTarget);
-			var shipmentId = button.data('shipment-id');
+			var shipmentId = button.data('id');
 
 			button.prop('disabled', true);
 
@@ -139,8 +146,8 @@
 			e.preventDefault();
 
 			var button = $(e.currentTarget);
-			var shipmentId = button.data('shipment-id');
-			var badgeSelector = '.fst-status-badge[data-shipment-id="' + shipmentId + '"]';
+			var shipmentId = button.data('id');
+			var badgeSelector = '.fst-status-badge[data-id="' + shipmentId + '"]';
 
 			button.prop('disabled', true).text('Checking...');
 
@@ -207,6 +214,87 @@
 				carrierSelect.val('usps'); // Default to USPS for numeric patterns
 				return;
 			}
+		},
+
+		/**
+		 * Test carrier API connection
+		 */
+		testCarrier: function (carrier, buttonSelector) {
+			var button = $(buttonSelector);
+			var originalText = button.text();
+			var resultSpan = button.next('.fst-test-result');
+
+			if (!resultSpan.length) {
+				button.after('<span class="fst-test-result" style="margin-left:10px;font-weight:500;"></span>');
+				resultSpan = button.next('.fst-test-result');
+			}
+
+			button.prop('disabled', true).text('Testing...');
+			resultSpan.text('').css('color', '');
+
+			$.ajax({
+				url: fst_admin.ajax_url,
+				type: 'POST',
+				data: {
+					action: 'fst_test_carrier',
+					nonce: fst_admin.nonce,
+					carrier: carrier,
+				},
+				success: function (response) {
+					if (response.success) {
+						resultSpan.text(response.data.message).css('color', '#46b450');
+					} else {
+						resultSpan.text(response.data.message).css('color', '#dc3232');
+					}
+				},
+				error: function () {
+					resultSpan.text('Connection failed - AJAX error').css('color', '#dc3232');
+				},
+				complete: function () {
+					button.prop('disabled', false).text(originalText);
+				},
+			});
+		},
+
+		/**
+		 * Send test email
+		 */
+		sendTestEmail: function (e) {
+			e.preventDefault();
+
+			var button = $(e.currentTarget);
+			var originalText = button.text();
+			var resultSpan = button.next('.fst-test-result');
+
+			if (!resultSpan.length) {
+				button.after('<span class="fst-test-result" style="margin-left:10px;font-weight:500;"></span>');
+				resultSpan = button.next('.fst-test-result');
+			}
+
+			button.prop('disabled', true).text('Sending...');
+			resultSpan.text('').css('color', '');
+
+			$.ajax({
+				url: fst_admin.ajax_url,
+				type: 'POST',
+				data: {
+					action: 'fst_send_test_email',
+					nonce: fst_admin.nonce,
+				},
+				success: function (response) {
+					if (response.success) {
+						resultSpan.text(response.data.message).css('color', '#46b450');
+					} else {
+						resultSpan.text(response.data.message).css('color', '#dc3232');
+					}
+				},
+				error: function () {
+					resultSpan.text('Failed - AJAX error').css('color', '#dc3232');
+				},
+				complete: function () {
+					button.prop('disabled', false).text(originalText);
+				},
+			});
 		},
 
 		/**
