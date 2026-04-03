@@ -112,12 +112,39 @@ class FST_Carrier_UPS extends FST_Carrier {
             return $response;
         }
 
-        $code = wp_remote_retrieve_response_code( $response );
-        $body = json_decode( wp_remote_retrieve_body( $response ), true );
+        $code     = wp_remote_retrieve_response_code( $response );
+        $raw_body = wp_remote_retrieve_body( $response );
+        $body     = json_decode( $raw_body, true );
+
+        $this->log( 'Track response for ' . $tracking_number . ': HTTP ' . $code );
 
         if ( 200 !== $code ) {
-            $this->log( 'Track failed for ' . $tracking_number . ': HTTP ' . $code );
+            $this->log( 'Track failed body: ' . substr( $raw_body, 0, 1000 ) );
             return new WP_Error( 'fst_ups_track_failed', 'UPS tracking request failed (HTTP ' . $code . ').' );
+        }
+
+        // Log the response structure for debugging.
+        $shipment_data = $body['trackResponse']['shipment'][0] ?? null;
+        if ( $shipment_data ) {
+            $package_data = $shipment_data['package'][0] ?? null;
+            if ( $package_data ) {
+                $this->log( 'Package keys: ' . implode( ', ', array_keys( $package_data ) ) );
+                if ( isset( $package_data['currentStatus'] ) ) {
+                    $this->log( 'currentStatus: ' . wp_json_encode( $package_data['currentStatus'] ) );
+                }
+                if ( isset( $package_data['status'] ) ) {
+                    $this->log( 'status field: ' . wp_json_encode( $package_data['status'] ) );
+                }
+                // Log first activity for reference.
+                if ( ! empty( $package_data['activity'][0] ) ) {
+                    $this->log( 'First activity: ' . wp_json_encode( $package_data['activity'][0] ) );
+                }
+            } else {
+                $this->log( 'No package found. Shipment keys: ' . implode( ', ', array_keys( $shipment_data ) ) );
+            }
+        } else {
+            $this->log( 'No shipment found. Response keys: ' . implode( ', ', array_keys( $body ) ) );
+            $this->log( 'Raw response (first 500): ' . substr( $raw_body, 0, 500 ) );
         }
 
         return $this->parse_response( $body );
