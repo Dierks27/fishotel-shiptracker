@@ -107,7 +107,7 @@ class FST_Settings {
                 </a>
             </nav>
 
-            <form method="post" class="fst-settings-form">
+            <form method="post" class="fst-settings-form" autocomplete="off">
                 <?php wp_nonce_field( 'fst_settings_nonce', 'fst_nonce' ); ?>
                 <input type="hidden" name="fst_tab" value="<?php echo esc_attr( $tab ); ?>">
 
@@ -215,7 +215,7 @@ class FST_Settings {
                     <label for="fst_ups_client_id"><?php esc_html_e( 'UPS Client ID', 'fishotel-shiptracker' ); ?></label>
                 </th>
                 <td>
-                    <input type="password" id="fst_ups_client_id" name="fst_ups_client_id" value="<?php echo esc_attr( $ups_client_id ); ?>" class="regular-text">
+                    <input type="text" id="fst_ups_client_id" name="fst_ups_client_id" value="<?php echo esc_attr( $ups_client_id ); ?>" class="regular-text" autocomplete="off">
                 </td>
             </tr>
             <tr>
@@ -223,7 +223,7 @@ class FST_Settings {
                     <label for="fst_ups_client_secret"><?php esc_html_e( 'UPS Client Secret', 'fishotel-shiptracker' ); ?></label>
                 </th>
                 <td>
-                    <input type="password" id="fst_ups_client_secret" name="fst_ups_client_secret" value="<?php echo esc_attr( $ups_client_secret ); ?>" class="regular-text">
+                    <input type="text" id="fst_ups_client_secret" name="fst_ups_client_secret" value="<?php echo esc_attr( $ups_client_secret ); ?>" class="regular-text" autocomplete="off">
                 </td>
             </tr>
             <tr>
@@ -241,7 +241,7 @@ class FST_Settings {
                     <label for="fst_usps_client_id"><?php esc_html_e( 'USPS Client ID', 'fishotel-shiptracker' ); ?></label>
                 </th>
                 <td>
-                    <input type="password" id="fst_usps_client_id" name="fst_usps_client_id" value="<?php echo esc_attr( $usps_client_id ); ?>" class="regular-text">
+                    <input type="text" id="fst_usps_client_id" name="fst_usps_client_id" value="<?php echo esc_attr( $usps_client_id ); ?>" class="regular-text" autocomplete="off">
                 </td>
             </tr>
             <tr>
@@ -249,7 +249,7 @@ class FST_Settings {
                     <label for="fst_usps_client_secret"><?php esc_html_e( 'USPS Client Secret', 'fishotel-shiptracker' ); ?></label>
                 </th>
                 <td>
-                    <input type="password" id="fst_usps_client_secret" name="fst_usps_client_secret" value="<?php echo esc_attr( $usps_client_secret ); ?>" class="regular-text">
+                    <input type="text" id="fst_usps_client_secret" name="fst_usps_client_secret" value="<?php echo esc_attr( $usps_client_secret ); ?>" class="regular-text" autocomplete="off">
                 </td>
             </tr>
             <tr>
