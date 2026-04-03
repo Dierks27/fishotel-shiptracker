@@ -141,6 +141,9 @@ class FST_Carrier_UPS extends FST_Carrier {
                 }
             } else {
                 $this->log( 'No package found. Shipment keys: ' . implode( ', ', array_keys( $shipment_data ) ) );
+                if ( isset( $shipment_data['warnings'] ) ) {
+                    $this->log( 'Warnings: ' . wp_json_encode( $shipment_data['warnings'] ) );
+                }
             }
         } else {
             $this->log( 'No shipment found. Response keys: ' . implode( ', ', array_keys( $body ) ) );
@@ -174,6 +177,18 @@ class FST_Carrier_UPS extends FST_Carrier {
 
         $package = $shipment['package'][0] ?? null;
         if ( ! $package ) {
+            // No package data — check warnings for details.
+            $warnings = $shipment['warnings'] ?? array();
+            if ( ! empty( $warnings ) ) {
+                $warning_msgs = array();
+                foreach ( $warnings as $w ) {
+                    $warning_msgs[] = $w['message'] ?? ( $w['description'] ?? wp_json_encode( $w ) );
+                }
+                $result['status_detail'] = implode( '; ', $warning_msgs );
+            }
+            // If UPS accepted the tracking number but has no package data,
+            // it likely means the label was created but not yet scanned.
+            $result['status'] = 'label_created';
             return $result;
         }
 
