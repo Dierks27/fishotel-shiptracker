@@ -15,12 +15,16 @@ $status_filter  = isset( $_GET['status'] ) ? sanitize_text_field( $_GET['status'
 $carrier_filter = isset( $_GET['carrier'] ) ? sanitize_text_field( $_GET['carrier'] ) : '';
 $search_query   = isset( $_GET['s'] ) ? sanitize_text_field( $_GET['s'] ) : '';
 $paged          = isset( $_GET['paged'] ) ? max( 1, intval( $_GET['paged'] ) ) : 1;
+$orderby        = isset( $_GET['orderby'] ) ? sanitize_text_field( $_GET['orderby'] ) : 'created_at';
+$order          = isset( $_GET['order'] ) ? sanitize_text_field( $_GET['order'] ) : 'DESC';
 $per_page       = 20;
 
 // Build query arguments.
 $query_args = array(
     'per_page' => $per_page,
     'page'     => $paged,
+    'orderby'  => $orderby,
+    'order'    => $order,
 );
 
 if ( $status_filter ) {
@@ -33,6 +37,34 @@ if ( $carrier_filter ) {
 
 if ( $search_query ) {
     $query_args['search'] = $search_query;
+}
+
+/**
+ * Build a sortable column header link.
+ *
+ * @param string $column  Column key (must match allowed_orderby in query()).
+ * @param string $label   Display label.
+ * @return string HTML link.
+ */
+function fst_sort_link( $column, $label ) {
+    global $orderby, $order, $status_filter, $carrier_filter, $search_query;
+
+    $is_current  = ( $orderby === $column );
+    $new_order   = ( $is_current && 'ASC' === strtoupper( $order ) ) ? 'DESC' : 'ASC';
+    $arrow       = '';
+
+    if ( $is_current ) {
+        $arrow = ( 'ASC' === strtoupper( $order ) ) ? ' &#9650;' : ' &#9660;';
+    }
+
+    $url = admin_url( 'admin.php?page=fst-dashboard&orderby=' . urlencode( $column ) . '&order=' . $new_order );
+    if ( $status_filter )  $url .= '&status=' . urlencode( $status_filter );
+    if ( $carrier_filter ) $url .= '&carrier=' . urlencode( $carrier_filter );
+    if ( $search_query )   $url .= '&s=' . urlencode( $search_query );
+
+    $style = $is_current ? 'font-weight:700;' : '';
+
+    return '<a href="' . esc_url( $url ) . '" style="text-decoration:none;color:inherit;' . $style . '">' . esc_html( $label ) . $arrow . '</a>';
 }
 
 // FST_Shipment::query() returns array( 'items' => [...], 'total' => int, 'pages' => int ).
@@ -111,6 +143,7 @@ function fst_is_shipment_late( $shipment ) {
                 <select id="fst-status-filter" name="status">
                     <option value=""><?php esc_html_e( 'All Statuses', 'fishotel-shiptracker' ); ?></option>
                     <option value="unknown" <?php selected( $status_filter, 'unknown' ); ?>>Unknown</option>
+                    <option value="label_created" <?php selected( $status_filter, 'label_created' ); ?>>Label Created</option>
                     <option value="pre_transit" <?php selected( $status_filter, 'pre_transit' ); ?>>Pre-Transit</option>
                     <option value="in_transit" <?php selected( $status_filter, 'in_transit' ); ?>>In Transit</option>
                     <option value="out_for_delivery" <?php selected( $status_filter, 'out_for_delivery' ); ?>>Out for Delivery</option>
@@ -144,13 +177,13 @@ function fst_is_shipment_late( $shipment ) {
         <table class="widefat striped fst-shipments-table">
             <thead>
                 <tr>
-                    <th><?php esc_html_e( 'Order #', 'fishotel-shiptracker' ); ?></th>
+                    <th><?php echo fst_sort_link( 'order_id', __( 'Order #', 'fishotel-shiptracker' ) ); ?></th>
                     <th><?php esc_html_e( 'Tracking #', 'fishotel-shiptracker' ); ?></th>
-                    <th><?php esc_html_e( 'Carrier', 'fishotel-shiptracker' ); ?></th>
-                    <th><?php esc_html_e( 'Status', 'fishotel-shiptracker' ); ?></th>
-                    <th><?php esc_html_e( 'Ship Date', 'fishotel-shiptracker' ); ?></th>
-                    <th><?php esc_html_e( 'Est. Delivery', 'fishotel-shiptracker' ); ?></th>
-                    <th><?php esc_html_e( 'Last Checked', 'fishotel-shiptracker' ); ?></th>
+                    <th><?php echo fst_sort_link( 'carrier', __( 'Carrier', 'fishotel-shiptracker' ) ); ?></th>
+                    <th><?php echo fst_sort_link( 'status', __( 'Status', 'fishotel-shiptracker' ) ); ?></th>
+                    <th><?php echo fst_sort_link( 'ship_date', __( 'Ship Date', 'fishotel-shiptracker' ) ); ?></th>
+                    <th><?php echo fst_sort_link( 'est_delivery', __( 'Est. Delivery', 'fishotel-shiptracker' ) ); ?></th>
+                    <th><?php echo fst_sort_link( 'updated_at', __( 'Last Checked', 'fishotel-shiptracker' ) ); ?></th>
                     <th><?php esc_html_e( 'Actions', 'fishotel-shiptracker' ); ?></th>
                 </tr>
             </thead>
@@ -220,6 +253,12 @@ function fst_is_shipment_late( $shipment ) {
                         }
                         if ( $search_query ) {
                             $base_url .= '&s=' . urlencode( $search_query );
+                        }
+                        if ( $orderby && 'created_at' !== $orderby ) {
+                            $base_url .= '&orderby=' . urlencode( $orderby );
+                        }
+                        if ( $order && 'DESC' !== $order ) {
+                            $base_url .= '&order=' . urlencode( $order );
                         }
 
                         echo paginate_links( array(
