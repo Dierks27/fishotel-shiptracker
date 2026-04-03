@@ -15,16 +15,16 @@ $status_filter  = isset( $_GET['status'] ) ? sanitize_text_field( $_GET['status'
 $carrier_filter = isset( $_GET['carrier'] ) ? sanitize_text_field( $_GET['carrier'] ) : '';
 $search_query   = isset( $_GET['s'] ) ? sanitize_text_field( $_GET['s'] ) : '';
 $paged          = isset( $_GET['paged'] ) ? max( 1, intval( $_GET['paged'] ) ) : 1;
-$orderby        = isset( $_GET['orderby'] ) ? sanitize_text_field( $_GET['orderby'] ) : 'created_at';
-$order          = isset( $_GET['order'] ) ? sanitize_text_field( $_GET['order'] ) : 'DESC';
+$fst_orderby    = isset( $_GET['orderby'] ) ? sanitize_text_field( $_GET['orderby'] ) : 'created_at';
+$fst_order      = isset( $_GET['order'] ) ? strtoupper( sanitize_text_field( $_GET['order'] ) ) : 'DESC';
 $per_page       = 20;
 
 // Build query arguments.
 $query_args = array(
     'per_page' => $per_page,
     'page'     => $paged,
-    'orderby'  => $orderby,
-    'order'    => $order,
+    'orderby'  => $fst_orderby,
+    'order'    => $fst_order,
 );
 
 if ( $status_filter ) {
@@ -47,14 +47,14 @@ if ( $search_query ) {
  * @return string HTML link.
  */
 function fst_sort_link( $column, $label ) {
-    global $orderby, $order, $status_filter, $carrier_filter, $search_query;
+    global $fst_orderby, $fst_order, $status_filter, $carrier_filter, $search_query;
 
-    $is_current  = ( $orderby === $column );
-    $new_order   = ( $is_current && 'ASC' === strtoupper( $order ) ) ? 'DESC' : 'ASC';
+    $is_current  = ( $fst_orderby === $column );
+    $new_order   = ( $is_current && 'ASC' === $fst_order ) ? 'DESC' : 'ASC';
     $arrow       = '';
 
     if ( $is_current ) {
-        $arrow = ( 'ASC' === strtoupper( $order ) ) ? ' &#9650;' : ' &#9660;';
+        $arrow = ( 'ASC' === $fst_order ) ? ' &#9650;' : ' &#9660;';
     }
 
     $url = admin_url( 'admin.php?page=fst-dashboard&orderby=' . urlencode( $column ) . '&order=' . $new_order );
@@ -254,11 +254,11 @@ function fst_is_shipment_late( $shipment ) {
                         if ( $search_query ) {
                             $base_url .= '&s=' . urlencode( $search_query );
                         }
-                        if ( $orderby && 'created_at' !== $orderby ) {
-                            $base_url .= '&orderby=' . urlencode( $orderby );
+                        if ( $fst_orderby && 'created_at' !== $fst_orderby ) {
+                            $base_url .= '&orderby=' . urlencode( $fst_orderby );
                         }
-                        if ( $order && 'DESC' !== $order ) {
-                            $base_url .= '&order=' . urlencode( $order );
+                        if ( $fst_order && 'DESC' !== $fst_order ) {
+                            $base_url .= '&order=' . urlencode( $fst_order );
                         }
 
                         echo paginate_links( array(
