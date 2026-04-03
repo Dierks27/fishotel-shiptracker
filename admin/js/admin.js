@@ -37,7 +37,7 @@
 			$(document).on('click', '#fst_test_usps', $.proxy(function () { this.testCarrier('usps', '#fst_test_usps'); }, this));
 
 			// Send test email button
-			$(document).on('click', '#fst_send_test_email', $.proxy(this.sendTestEmail, this));
+			$(document).on('click', '#fst-send-test-email', $.proxy(this.sendTestEmail, this));
 		},
 
 		/**

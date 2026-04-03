@@ -39,6 +39,13 @@ class FST_Activator {
             self::create_tables();
             update_option( 'fst_db_version', FST_DB_VERSION );
         }
+
+        // Fix: if polling_interval was set to a value below the HTML5 min (300),
+        // the settings form silently refuses to submit. Auto-fix existing installs.
+        $polling = get_option( 'fst_polling_interval', 3600 );
+        if ( $polling < 300 ) {
+            update_option( 'fst_polling_interval', 3600 );
+        }
     }
 
     /**
@@ -100,12 +107,11 @@ class FST_Activator {
     private static function set_default_options() {
         $defaults = array(
             'fst_default_carrier'    => 'ups',
-            'fst_auto_detect_carrier' => 'yes',
-            'fst_auto_complete_order' => 'yes',
+            'fst_auto_detect_carrier' => 1,
+            'fst_auto_complete_orders' => 1,
             'fst_data_retention_days' => 1095, // 3 years
             'fst_debug_logging'      => 'no',
-            'fst_polling_interval'   => 60,    // minutes
-            'fst_ofd_polling_interval' => 30,  // minutes for out-for-delivery
+            'fst_polling_interval'   => 3600,  // seconds (1 hour) — must be >= 300 to pass HTML5 validation
 
             // UPS credentials.
             'fst_ups_client_id'      => '',

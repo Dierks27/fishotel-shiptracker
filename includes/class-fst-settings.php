@@ -139,19 +139,6 @@ class FST_Settings {
             </form>
         </div>
 
-        <script>
-            jQuery(function($) {
-                $('.nav-tab').on('click', function(e) {
-                    e.preventDefault();
-                    var tab = $(this).attr('href').substring(1);
-                    $('.fst-tab-content').removeClass('active');
-                    $('#' + tab).addClass('active');
-                    $('input[name="fst_tab"]').val(tab);
-                    $('.nav-tab').removeClass('nav-tab-active');
-                    $(this).addClass('nav-tab-active');
-                });
-            });
-        </script>
         <?php
     }
 
@@ -418,31 +405,6 @@ class FST_Settings {
             </div>
         <?php } ?>
 
-        <script>
-        jQuery(function($) {
-            $('#fst-send-test-email').on('click', function() {
-                var $btn    = $(this);
-                var $status = $('#fst-test-email-status');
-                $btn.prop('disabled', true);
-                $status.html('<span style="color:#666;">Sending...</span>');
-
-                $.post(fst_admin.ajax_url, {
-                    action: 'fst_send_test_email',
-                    nonce: fst_admin.nonce
-                }, function(response) {
-                    $btn.prop('disabled', false);
-                    if (response.success) {
-                        $status.html('<span style="color:#2e7d32;">&#10003; Test email sent!</span>');
-                    } else {
-                        $status.html('<span style="color:#d63638;">&#10007; ' + (response.data.message || 'Failed') + '</span>');
-                    }
-                }).fail(function() {
-                    $btn.prop('disabled', false);
-                    $status.html('<span style="color:#d63638;">&#10007; Request failed</span>');
-                });
-            });
-        });
-        </script>
         <?php
     }
 
