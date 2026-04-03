@@ -177,12 +177,14 @@ class FST_Carrier_UPS extends FST_Carrier {
             return $result;
         }
 
-        // Current status.
+        // Current status — UPS uses 'type' for the status letter code (D, I, P, M, X etc.)
+        // and 'code' for a more specific code (e.g., "SR", "KB"). We map on 'type' first.
         $current_status = $package['currentStatus'] ?? array();
+        $status_type    = $current_status['type'] ?? '';
         $status_code    = $current_status['code'] ?? '';
         $status_desc    = $current_status['description'] ?? '';
 
-        $result['status']        = $this->map_status( $status_code, $status_desc );
+        $result['status']        = $this->map_status( $status_type, $status_code, $status_desc );
         $result['status_detail'] = $status_desc;
 
         // Estimated delivery.
@@ -202,7 +204,7 @@ class FST_Carrier_UPS extends FST_Carrier {
         $activities = $package['activity'] ?? array();
         foreach ( $activities as $activity ) {
             $event = array(
-                'status'      => $this->map_status( $activity['status']['code'] ?? '', $activity['status']['description'] ?? '' ),
+                'status'      => $this->map_status( $activity['status']['type'] ?? '', $activity['status']['code'] ?? '', $activity['status']['description'] ?? '' ),
                 'description' => $activity['status']['description'] ?? '',
                 'location'    => $this->format_location( $activity['location'] ?? array() ),
                 'event_time'  => $this->parse_datetime( $activity['date'] ?? '', $activity['time'] ?? '' ),
@@ -221,29 +223,50 @@ class FST_Carrier_UPS extends FST_Carrier {
     }
 
     /**
-     * Map UPS status code to internal status.
+     * Map UPS status to internal status.
      *
-     * @param string $code UPS status code.
+     * UPS response has both 'type' (single letter like D, I, P, M, X) and
+     * 'code' (more specific like SR, KB, OR). We check type first, then code.
+     *
+     * @param string $type        UPS status type (D, I, P, M, X, etc.).
+     * @param string $code        UPS status code (SR, KB, OR, etc.).
      * @param string $description Status description for fallback matching.
      * @return string Internal status slug.
      */
-    private function map_status( $code, $description = '' ) {
-        // UPS status type codes.
-        $map = array(
-            'D'  => 'delivered',       // Delivered.
-            'I'  => 'in_transit',      // In Transit.
-            'P'  => 'pre_transit',     // Picked up.
-            'M'  => 'label_created',   // Manifest/Billing info received.
-            'MV' => 'label_created',   // Manifest/Billing info voided.
-            'X'  => 'exception',       // Exception.
+    private function map_status( $type, $code = '', $description = '' ) {
+        // Primary map: 'type' field — the main status category.
+        $type_map = array(
+            'D'  => 'delivered',
+            'I'  => 'in_transit',
+            'P'  => 'pre_transit',
+            'M'  => 'label_created',
+            'MV' => 'label_created',
+            'X'  => 'exception',
             'RS' => 'return_to_sender',
             'DO' => 'out_for_delivery',
             'DD' => 'out_for_delivery',
             'O'  => 'out_for_delivery',
         );
 
-        if ( isset( $map[ $code ] ) ) {
-            return $map[ $code ];
+        if ( ! empty( $type ) && isset( $type_map[ $type ] ) ) {
+            return $type_map[ $type ];
+        }
+
+        // Secondary map: 'code' field — more specific status codes.
+        $code_map = array(
+            'SR' => 'in_transit',       // Shipment received by carrier.
+            'OR' => 'label_created',    // Order processed / ready for UPS.
+            'DP' => 'in_transit',       // Departure scan.
+            'AR' => 'in_transit',       // Arrival scan.
+            'KB' => 'label_created',    // Billing info received.
+            'OT' => 'out_for_delivery', // Out for delivery.
+            'DL' => 'delivered',        // Delivered.
+            'DS' => 'delivered',        // Delivered (signed).
+            'MP' => 'label_created',    // Manifest pickup.
+        );
+
+        if ( ! empty( $code ) && isset( $code_map[ $code ] ) ) {
+            return $code_map[ $code ];
         }
 
         // Fallback: check description text.
@@ -251,9 +274,15 @@ class FST_Carrier_UPS extends FST_Carrier {
         if ( false !== strpos( $desc_lower, 'delivered' ) ) return 'delivered';
         if ( false !== strpos( $desc_lower, 'out for delivery' ) ) return 'out_for_delivery';
         if ( false !== strpos( $desc_lower, 'in transit' ) ) return 'in_transit';
+        if ( false !== strpos( $desc_lower, 'picked up' ) ) return 'pre_transit';
         if ( false !== strpos( $desc_lower, 'pickup' ) ) return 'available_for_pickup';
         if ( false !== strpos( $desc_lower, 'exception' ) ) return 'exception';
         if ( false !== strpos( $desc_lower, 'return' ) ) return 'return_to_sender';
+        if ( false !== strpos( $desc_lower, 'label' ) ) return 'label_created';
+        if ( false !== strpos( $desc_lower, 'billing' ) ) return 'label_created';
+        if ( false !== strpos( $desc_lower, 'origin scan' ) ) return 'in_transit';
+        if ( false !== strpos( $desc_lower, 'departed' ) ) return 'in_transit';
+        if ( false !== strpos( $desc_lower, 'arrived' ) ) return 'in_transit';
 
         return 'unknown';
     }
