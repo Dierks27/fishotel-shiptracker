@@ -183,7 +183,7 @@ $page_url = admin_url( 'admin.php?page=fst-analytics' );
 
     <p style="color: #666; font-size: 12px; margin: -8px 0 16px;">
         <?php echo wp_kses( $range_label, array( 'span' => array() ) ); ?>
-        &mdash; <?php esc_html_e( 'shipments with "Unknown" status are excluded from all stats.', 'fishotel-shiptracker' ); ?>
+        &mdash; <?php esc_html_e( 'shipments with "Unknown" or "Label Created" status are excluded from all stats.', 'fishotel-shiptracker' ); ?>
     </p>
 
     <!-- Top KPI Cards -->
@@ -268,7 +268,6 @@ $page_url = admin_url( 'admin.php?page=fst-analytics' );
                     'in_transit'       => 'In Transit',
                     'out_for_delivery' => 'Out for Delivery',
                     'pre_transit'      => 'Pre-Transit',
-                    'label_created'    => 'Label Created',
                     'exception'        => 'Exception',
                     'return_to_sender' => 'Return to Sender',
                     'failure'          => 'Failure',

@@ -268,7 +268,7 @@ class FST_Shipment {
     public static function count_by_status( $date_from = '', $date_to = '' ) {
         global $wpdb;
 
-        $where  = "WHERE status != 'unknown'";
+        $where  = "WHERE status NOT IN ('unknown','label_created')";
         $values = array();
 
         if ( $date_from ) {
@@ -378,7 +378,7 @@ class FST_Shipment {
     public static function count_by_carrier( $date_from = '', $date_to = '' ) {
         global $wpdb;
 
-        $where  = "WHERE status != 'unknown'";
+        $where  = "WHERE status NOT IN ('unknown','label_created')";
         $values = array();
 
         if ( $date_from ) {
@@ -423,7 +423,7 @@ class FST_Shipment {
         return $wpdb->get_results( $wpdb->prepare(
             "SELECT DATE(created_at) as date, COUNT(*) as count
              FROM " . self::table() . "
-             WHERE status != 'unknown'
+             WHERE status NOT IN ('unknown','label_created')
              AND created_at >= %s
              AND created_at <= %s
              GROUP BY DATE(created_at)
