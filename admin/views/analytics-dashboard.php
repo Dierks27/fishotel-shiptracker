@@ -221,18 +221,20 @@ $page_url = admin_url( 'admin.php?page=fst-analytics' );
         <div style="background: #fff; padding: 20px; border: 1px solid #ccd0d4; border-radius: 6px;">
             <h3 style="margin: 0 0 16px;"><?php esc_html_e( 'Shipment Volume', 'fishotel-shiptracker' ); ?></h3>
             <?php if ( array_sum( $chart_shipped ) > 0 || array_sum( $chart_delivered ) > 0 ) :
-                // Calculate nice Y-axis ticks.
+                // Calculate nice Y-axis ticks that fit the actual data.
                 $y_max = $max_daily;
                 if ( $y_max <= 5 ) {
                     $y_step = 1;
-                } elseif ( $y_max <= 20 ) {
+                } elseif ( $y_max <= 10 ) {
+                    $y_step = 2;
+                } elseif ( $y_max <= 25 ) {
                     $y_step = 5;
                 } elseif ( $y_max <= 50 ) {
                     $y_step = 10;
                 } else {
-                    $y_step = (int) ceil( $y_max / 5 / 10 ) * 10;
+                    $y_step = (int) ceil( $y_max / 5 );
                 }
-                $y_top   = (int) ceil( $y_max / $y_step ) * $y_step;
+                $y_top = (int) ceil( $y_max / $y_step ) * $y_step;
                 if ( $y_top < 1 ) $y_top = 1;
                 $y_ticks = array();
                 for ( $t = $y_top; $t >= 0; $t -= $y_step ) {

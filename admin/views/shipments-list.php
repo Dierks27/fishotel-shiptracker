@@ -15,7 +15,7 @@ $status_filter  = isset( $_GET['status'] ) ? sanitize_text_field( $_GET['status'
 $carrier_filter = isset( $_GET['carrier'] ) ? sanitize_text_field( $_GET['carrier'] ) : '';
 $search_query   = isset( $_GET['s'] ) ? sanitize_text_field( $_GET['s'] ) : '';
 $paged          = isset( $_GET['paged'] ) ? max( 1, intval( $_GET['paged'] ) ) : 1;
-$fst_orderby    = isset( $_GET['orderby'] ) ? sanitize_text_field( $_GET['orderby'] ) : 'created_at';
+$fst_orderby    = isset( $_GET['orderby'] ) ? sanitize_text_field( $_GET['orderby'] ) : 'ship_date';
 $fst_order      = isset( $_GET['order'] ) ? strtoupper( sanitize_text_field( $_GET['order'] ) ) : 'DESC';
 $per_page       = 20;
 
@@ -260,7 +260,7 @@ function fst_is_shipment_late( $shipment ) {
                         if ( $search_query ) {
                             $base_url .= '&s=' . urlencode( $search_query );
                         }
-                        if ( $fst_orderby && 'created_at' !== $fst_orderby ) {
+                        if ( $fst_orderby && 'ship_date' !== $fst_orderby ) {
                             $base_url .= '&orderby=' . urlencode( $fst_orderby );
                         }
                         if ( $fst_order && 'DESC' !== $fst_order ) {
