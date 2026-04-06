@@ -222,17 +222,15 @@ $page_url = admin_url( 'admin.php?page=fst-analytics' );
             <h3 style="margin: 0 0 16px;"><?php esc_html_e( 'Shipment Volume', 'fishotel-shiptracker' ); ?></h3>
             <?php if ( array_sum( $chart_shipped ) > 0 || array_sum( $chart_delivered ) > 0 ) :
                 // Calculate nice Y-axis ticks that fit the actual data.
-                $y_max = $max_daily;
-                if ( $y_max <= 5 ) {
-                    $y_step = 1;
-                } elseif ( $y_max <= 10 ) {
-                    $y_step = 2;
-                } elseif ( $y_max <= 25 ) {
-                    $y_step = 5;
-                } elseif ( $y_max <= 50 ) {
-                    $y_step = 10;
-                } else {
-                    $y_step = (int) ceil( $y_max / 5 );
+                // Pick from clean step sizes so the axis always has round numbers.
+                $y_max       = $max_daily;
+                $nice_steps  = array( 1, 2, 5, 10, 20, 25, 50, 100, 200, 250, 500, 1000 );
+                $y_step      = 1;
+                foreach ( $nice_steps as $ns ) {
+                    if ( ceil( $y_max / $ns ) <= 6 ) {
+                        $y_step = $ns;
+                        break;
+                    }
                 }
                 $y_top = (int) ceil( $y_max / $y_step ) * $y_step;
                 if ( $y_top < 1 ) $y_top = 1;
@@ -266,16 +264,22 @@ $page_url = admin_url( 'admin.php?page=fst-analytics' );
                                 <?php for ( $i = 0; $i < count( $chart_shipped ); $i++ ) :
                                     $s_pct = $y_top > 0 ? ( $chart_shipped[ $i ] / $y_top ) * 100 : 0;
                                     $d_pct = $y_top > 0 ? ( $chart_delivered[ $i ] / $y_top ) * 100 : 0;
-                                    $bar_total = $chart_shipped[ $i ] + $chart_delivered[ $i ];
                                 ?>
-                                    <div style="flex: 1; display: flex; flex-direction: column; align-items: center; height: 100%; justify-content: flex-end;"
+                                    <div style="flex: 1; display: flex; gap: 1px; align-items: flex-end; height: 100%;"
                                          title="<?php echo esc_attr( $chart_dates[ $i ] . ': ' . $chart_shipped[ $i ] . ' created, ' . $chart_delivered[ $i ] . ' delivered' ); ?>">
-                                        <?php if ( $bar_total > 0 ) : ?>
-                                            <span style="font-size: 9px; color: #666; font-weight: 600; margin-bottom: 2px;"><?php echo esc_html( $bar_total ); ?></span>
-                                        <?php endif; ?>
-                                        <div style="width: 100%; display: flex; gap: 1px; align-items: flex-end;">
-                                            <div style="flex: 1; background: #0073aa; border-radius: 2px 2px 0 0; min-height: <?php echo $chart_shipped[ $i ] > 0 ? '4' : '0'; ?>px; height: <?php echo esc_attr( $s_pct ); ?>%;"></div>
-                                            <div style="flex: 1; background: #1e7e34; border-radius: 2px 2px 0 0; min-height: <?php echo $chart_delivered[ $i ] > 0 ? '4' : '0'; ?>px; height: <?php echo esc_attr( $d_pct ); ?>%;"></div>
+                                        <!-- Created bar -->
+                                        <div style="flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; height: 100%;">
+                                            <?php if ( $chart_shipped[ $i ] > 0 ) : ?>
+                                                <span style="font-size: 9px; color: #0073aa; font-weight: 600; margin-bottom: 1px;"><?php echo esc_html( $chart_shipped[ $i ] ); ?></span>
+                                            <?php endif; ?>
+                                            <div style="width: 100%; background: #0073aa; border-radius: 2px 2px 0 0; min-height: <?php echo $chart_shipped[ $i ] > 0 ? '4' : '0'; ?>px; height: <?php echo esc_attr( $s_pct ); ?>%;"></div>
+                                        </div>
+                                        <!-- Delivered bar -->
+                                        <div style="flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; height: 100%;">
+                                            <?php if ( $chart_delivered[ $i ] > 0 ) : ?>
+                                                <span style="font-size: 9px; color: #1e7e34; font-weight: 600; margin-bottom: 1px;"><?php echo esc_html( $chart_delivered[ $i ] ); ?></span>
+                                            <?php endif; ?>
+                                            <div style="width: 100%; background: #1e7e34; border-radius: 2px 2px 0 0; min-height: <?php echo $chart_delivered[ $i ] > 0 ? '4' : '0'; ?>px; height: <?php echo esc_attr( $d_pct ); ?>%;"></div>
                                         </div>
                                     </div>
                                 <?php endfor; ?>
