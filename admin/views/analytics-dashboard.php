@@ -158,7 +158,7 @@ $page_url = admin_url( 'admin.php?page=fst-analytics' );
         foreach ( $presets as $pkey => $plabel ) :
             $active = ( $range_preset === $pkey );
         ?>
-            <a href="<?php echo esc_url( add_query_arg( array( 'fst_range' => $pkey ), $page_url ) ); ?>"
+            <a href="<?php echo esc_url( $page_url . '&fst_range=' . $pkey ); ?>"
                style="padding: 6px 14px; border-radius: 4px; text-decoration: none; font-size: 13px; font-weight: 500;
                       <?php echo $active
                           ? 'background: #0073aa; color: #fff;'
@@ -170,7 +170,7 @@ $page_url = admin_url( 'admin.php?page=fst-analytics' );
         <span style="color: #ccc; margin: 0 4px;">|</span>
 
         <form method="get" action="<?php echo esc_url( $page_url ); ?>" style="display: flex; align-items: center; gap: 6px; margin: 0;">
-            <input type="hidden" name="page" value="fishotel-shiptracker-analytics" />
+            <input type="hidden" name="page" value="fst-analytics" />
             <input type="hidden" name="fst_range" value="custom" />
             <input type="date" name="fst_from" value="<?php echo esc_attr( $date_from ); ?>"
                    style="padding: 4px 8px; border: 1px solid #ccd0d4; border-radius: 4px; font-size: 13px;" />
