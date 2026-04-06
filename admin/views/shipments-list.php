@@ -42,19 +42,25 @@ if ( $search_query ) {
 /**
  * Build a sortable column header link.
  *
- * @param string $column  Column key (must match allowed_orderby in query()).
- * @param string $label   Display label.
+ * Variables are passed explicitly because this file is included from a method
+ * scope, so they are NOT in the global scope.
+ *
+ * @param string $column         Column key (must match allowed_orderby in query()).
+ * @param string $label          Display label.
+ * @param string $cur_orderby    Current orderby column.
+ * @param string $cur_order      Current order direction (ASC/DESC).
+ * @param string $status_filter  Current status filter.
+ * @param string $carrier_filter Current carrier filter.
+ * @param string $search_query   Current search query.
  * @return string HTML link.
  */
-function fst_sort_link( $column, $label ) {
-    global $fst_orderby, $fst_order, $status_filter, $carrier_filter, $search_query;
-
-    $is_current  = ( $fst_orderby === $column );
-    $new_order   = ( $is_current && 'ASC' === $fst_order ) ? 'DESC' : 'ASC';
+function fst_sort_link( $column, $label, $cur_orderby, $cur_order, $status_filter, $carrier_filter, $search_query ) {
+    $is_current  = ( $cur_orderby === $column );
+    $new_order   = ( $is_current && 'ASC' === $cur_order ) ? 'DESC' : 'ASC';
     $arrow       = '';
 
     if ( $is_current ) {
-        $arrow = ( 'ASC' === $fst_order ) ? ' &#9650;' : ' &#9660;';
+        $arrow = ( 'ASC' === $cur_order ) ? ' &#9650;' : ' &#9660;';
     }
 
     $url = admin_url( 'admin.php?page=fst-dashboard&orderby=' . urlencode( $column ) . '&order=' . $new_order );
@@ -177,13 +183,13 @@ function fst_is_shipment_late( $shipment ) {
         <table class="widefat striped fst-shipments-table">
             <thead>
                 <tr>
-                    <th><?php echo fst_sort_link( 'order_id', __( 'Order #', 'fishotel-shiptracker' ) ); ?></th>
+                    <th><?php echo fst_sort_link( 'order_id', __( 'Order #', 'fishotel-shiptracker' ), $fst_orderby, $fst_order, $status_filter, $carrier_filter, $search_query ); ?></th>
                     <th><?php esc_html_e( 'Tracking #', 'fishotel-shiptracker' ); ?></th>
-                    <th><?php echo fst_sort_link( 'carrier', __( 'Carrier', 'fishotel-shiptracker' ) ); ?></th>
-                    <th><?php echo fst_sort_link( 'status', __( 'Status', 'fishotel-shiptracker' ) ); ?></th>
-                    <th><?php echo fst_sort_link( 'ship_date', __( 'Ship Date', 'fishotel-shiptracker' ) ); ?></th>
-                    <th><?php echo fst_sort_link( 'est_delivery', __( 'Est. Delivery', 'fishotel-shiptracker' ) ); ?></th>
-                    <th><?php echo fst_sort_link( 'updated_at', __( 'Last Checked', 'fishotel-shiptracker' ) ); ?></th>
+                    <th><?php echo fst_sort_link( 'carrier', __( 'Carrier', 'fishotel-shiptracker' ), $fst_orderby, $fst_order, $status_filter, $carrier_filter, $search_query ); ?></th>
+                    <th><?php echo fst_sort_link( 'status', __( 'Status', 'fishotel-shiptracker' ), $fst_orderby, $fst_order, $status_filter, $carrier_filter, $search_query ); ?></th>
+                    <th><?php echo fst_sort_link( 'ship_date', __( 'Ship Date', 'fishotel-shiptracker' ), $fst_orderby, $fst_order, $status_filter, $carrier_filter, $search_query ); ?></th>
+                    <th><?php echo fst_sort_link( 'est_delivery', __( 'Est. Delivery', 'fishotel-shiptracker' ), $fst_orderby, $fst_order, $status_filter, $carrier_filter, $search_query ); ?></th>
+                    <th><?php echo fst_sort_link( 'updated_at', __( 'Last Checked', 'fishotel-shiptracker' ), $fst_orderby, $fst_order, $status_filter, $carrier_filter, $search_query ); ?></th>
                     <th><?php esc_html_e( 'Actions', 'fishotel-shiptracker' ); ?></th>
                 </tr>
             </thead>
@@ -210,7 +216,7 @@ function fst_is_shipment_late( $shipment ) {
                             <?php echo esc_html( strtoupper( $shipment->carrier ) ); ?>
                         </td>
                         <td>
-                            <span class="fst-status-badge" style="background-color: <?php echo esc_attr( FST_Carrier::get_status_color( $shipment->status ) ); ?>; color: #fff; padding: 2px 8px; border-radius: 3px; font-size: 11px; display: inline-block;">
+                            <span class="fst-status-badge" data-id="<?php echo esc_attr( $shipment->id ); ?>" style="background-color: <?php echo esc_attr( FST_Carrier::get_status_color( $shipment->status ) ); ?>; color: #fff; padding: 2px 8px; border-radius: 3px; font-size: 11px; display: inline-block;">
                                 <?php echo esc_html( fst_format_status_label( $shipment->status ) ); ?>
                             </span>
                             <?php if ( $is_late ) : ?>

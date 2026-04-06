@@ -351,4 +351,113 @@ class FST_Shipment {
             'pages' => ceil( $total / max( 1, (int) $args['per_page'] ) ),
         );
     }
+
+    /**
+     * Count shipments by carrier.
+     *
+     * @return array carrier => count
+     */
+    public static function count_by_carrier() {
+        global $wpdb;
+
+        $results = $wpdb->get_results(
+            "SELECT carrier, COUNT(*) as count FROM " . self::table() . " GROUP BY carrier"
+        );
+
+        $counts = array();
+        foreach ( $results as $row ) {
+            $counts[ $row->carrier ] = (int) $row->count;
+        }
+        return $counts;
+    }
+
+    /**
+     * Get shipment counts per day for the last N days.
+     *
+     * @param int $days Number of days to look back.
+     * @return array [ { date, count } ]
+     */
+    public static function count_per_day( $days = 30 ) {
+        global $wpdb;
+
+        return $wpdb->get_results( $wpdb->prepare(
+            "SELECT DATE(created_at) as date, COUNT(*) as count
+             FROM " . self::table() . "
+             WHERE created_at >= DATE_SUB(%s, INTERVAL %d DAY)
+             GROUP BY DATE(created_at)
+             ORDER BY date ASC",
+            current_time( 'mysql' ),
+            $days
+        ) );
+    }
+
+    /**
+     * Get average delivery time in days (ship_date to delivered_date).
+     *
+     * @return float|null Average days, or null if no data.
+     */
+    public static function avg_delivery_days() {
+        global $wpdb;
+
+        $avg = $wpdb->get_var(
+            "SELECT AVG(DATEDIFF(delivered_date, ship_date))
+             FROM " . self::table() . "
+             WHERE status = 'delivered'
+             AND delivered_date IS NOT NULL
+             AND ship_date IS NOT NULL
+             AND delivered_date > ship_date"
+        );
+
+        return null !== $avg ? round( (float) $avg, 1 ) : null;
+    }
+
+    /**
+     * Get average delivery time by carrier.
+     *
+     * @return array carrier => avg_days
+     */
+    public static function avg_delivery_days_by_carrier() {
+        global $wpdb;
+
+        $results = $wpdb->get_results(
+            "SELECT carrier, AVG(DATEDIFF(delivered_date, ship_date)) as avg_days, COUNT(*) as count
+             FROM " . self::table() . "
+             WHERE status = 'delivered'
+             AND delivered_date IS NOT NULL
+             AND ship_date IS NOT NULL
+             AND delivered_date > ship_date
+             GROUP BY carrier"
+        );
+
+        $data = array();
+        foreach ( $results as $row ) {
+            $data[ $row->carrier ] = array(
+                'avg_days' => round( (float) $row->avg_days, 1 ),
+                'count'    => (int) $row->count,
+            );
+        }
+        return $data;
+    }
+
+    /**
+     * Get delivery counts per day for the last N days.
+     *
+     * @param int $days Number of days to look back.
+     * @return array [ { date, count } ]
+     */
+    public static function deliveries_per_day( $days = 30 ) {
+        global $wpdb;
+
+        return $wpdb->get_results( $wpdb->prepare(
+            "SELECT DATE(delivered_date) as date, COUNT(*) as count
+             FROM " . self::table() . "
+             WHERE status = 'delivered'
+             AND delivered_date IS NOT NULL
+             AND delivered_date >= DATE_SUB(%s, INTERVAL %d DAY)
+             GROUP BY DATE(delivered_date)
+             ORDER BY date ASC",
+            current_time( 'mysql' ),
+            $days
+        ) );
+    }
 }
