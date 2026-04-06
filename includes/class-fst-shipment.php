@@ -272,12 +272,12 @@ class FST_Shipment {
         $values = array();
 
         if ( $date_from ) {
-            $where   .= ' AND created_at >= %s';
-            $values[] = $date_from . ' 00:00:00';
+            $where   .= ' AND ship_date >= %s';
+            $values[] = $date_from;
         }
         if ( $date_to ) {
-            $where   .= ' AND created_at <= %s';
-            $values[] = $date_to . ' 23:59:59';
+            $where   .= ' AND ship_date <= %s';
+            $values[] = $date_to;
         }
 
         $sql = "SELECT status, COUNT(*) as count FROM " . self::table() . " {$where} GROUP BY status";
@@ -382,12 +382,12 @@ class FST_Shipment {
         $values = array();
 
         if ( $date_from ) {
-            $where   .= ' AND created_at >= %s';
-            $values[] = $date_from . ' 00:00:00';
+            $where   .= ' AND ship_date >= %s';
+            $values[] = $date_from;
         }
         if ( $date_to ) {
-            $where   .= ' AND created_at <= %s';
-            $values[] = $date_to . ' 23:59:59';
+            $where   .= ' AND ship_date <= %s';
+            $values[] = $date_to;
         }
 
         $sql = "SELECT carrier, COUNT(*) as count FROM " . self::table() . " {$where} GROUP BY carrier";
@@ -421,15 +421,16 @@ class FST_Shipment {
         }
 
         return $wpdb->get_results( $wpdb->prepare(
-            "SELECT DATE(created_at) as date, COUNT(*) as count
+            "SELECT DATE(ship_date) as date, COUNT(*) as count
              FROM " . self::table() . "
              WHERE status NOT IN ('unknown','label_created')
-             AND created_at >= %s
-             AND created_at <= %s
-             GROUP BY DATE(created_at)
+             AND ship_date IS NOT NULL
+             AND ship_date >= %s
+             AND ship_date <= %s
+             GROUP BY DATE(ship_date)
              ORDER BY date ASC",
-            $date_from . ' 00:00:00',
-            $date_to . ' 23:59:59'
+            $date_from,
+            $date_to
         ) );
     }
 
@@ -447,12 +448,12 @@ class FST_Shipment {
         $values = array();
 
         if ( $date_from ) {
-            $where   .= ' AND created_at >= %s';
-            $values[] = $date_from . ' 00:00:00';
+            $where   .= ' AND ship_date >= %s';
+            $values[] = $date_from;
         }
         if ( $date_to ) {
-            $where   .= ' AND created_at <= %s';
-            $values[] = $date_to . ' 23:59:59';
+            $where   .= ' AND ship_date <= %s';
+            $values[] = $date_to;
         }
 
         $sql = "SELECT AVG(DATEDIFF(delivered_date, ship_date)) FROM " . self::table() . " {$where}";
@@ -478,12 +479,12 @@ class FST_Shipment {
         $values = array();
 
         if ( $date_from ) {
-            $where   .= ' AND created_at >= %s';
-            $values[] = $date_from . ' 00:00:00';
+            $where   .= ' AND ship_date >= %s';
+            $values[] = $date_from;
         }
         if ( $date_to ) {
-            $where   .= ' AND created_at <= %s';
-            $values[] = $date_to . ' 23:59:59';
+            $where   .= ' AND ship_date <= %s';
+            $values[] = $date_to;
         }
 
         $sql = "SELECT carrier, AVG(DATEDIFF(delivered_date, ship_date)) as avg_days, COUNT(*) as count

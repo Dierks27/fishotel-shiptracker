@@ -240,7 +240,7 @@ $page_url = admin_url( 'admin.php?page=fst-analytics' );
                 }
             ?>
                 <div style="display: flex; gap: 16px; font-size: 12px; margin-bottom: 10px;">
-                    <span><span style="display: inline-block; width: 12px; height: 12px; background: #0073aa; border-radius: 2px; margin-right: 4px;"></span><?php esc_html_e( 'Created', 'fishotel-shiptracker' ); ?></span>
+                    <span><span style="display: inline-block; width: 12px; height: 12px; background: #0073aa; border-radius: 2px; margin-right: 4px;"></span><?php esc_html_e( 'Shipped', 'fishotel-shiptracker' ); ?></span>
                     <span><span style="display: inline-block; width: 12px; height: 12px; background: #1e7e34; border-radius: 2px; margin-right: 4px;"></span><?php esc_html_e( 'Delivered', 'fishotel-shiptracker' ); ?></span>
                 </div>
                 <div style="display: flex; height: 220px;">
@@ -266,7 +266,7 @@ $page_url = admin_url( 'admin.php?page=fst-analytics' );
                                     $d_pct = $y_top > 0 ? ( $chart_delivered[ $i ] / $y_top ) * 100 : 0;
                                 ?>
                                     <div style="flex: 1; display: flex; gap: 1px; align-items: flex-end; height: 100%;"
-                                         title="<?php echo esc_attr( $chart_dates[ $i ] . ': ' . $chart_shipped[ $i ] . ' created, ' . $chart_delivered[ $i ] . ' delivered' ); ?>">
+                                         title="<?php echo esc_attr( $chart_dates[ $i ] . ': ' . $chart_shipped[ $i ] . ' shipped, ' . $chart_delivered[ $i ] . ' delivered' ); ?>">
                                         <!-- Created bar -->
                                         <div style="flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; height: 100%;">
                                             <?php if ( $chart_shipped[ $i ] > 0 ) : ?>
