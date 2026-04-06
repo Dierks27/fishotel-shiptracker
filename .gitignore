@@ -1,0 +1,40 @@
+# Dependencies
+/vendor/
+/node_modules/
+
+# Build artifacts
+*.min.js.map
+*.min.css.map
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# WordPress
+wp-config.php
+wp-content/uploads/
+
+# Environment and secrets
+.env
+.env.*
+credentials.json
+*.pem
+*.key
+
+# Logs
+*.log
+debug.log
+
+# Composer
+composer.lock
+
+# Archives
+*.zip
+*.tar.gz
