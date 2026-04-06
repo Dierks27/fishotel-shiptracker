@@ -105,6 +105,9 @@ class FST_Settings {
                 <a href="#advanced" class="nav-tab <?php echo 'advanced' === $tab ? 'nav-tab-active' : ''; ?>">
                     <?php esc_html_e( 'Advanced', 'fishotel-shiptracker' ); ?>
                 </a>
+                <a href="#migration" class="nav-tab <?php echo 'migration' === $tab ? 'nav-tab-active' : ''; ?>">
+                    <?php esc_html_e( 'Migration', 'fishotel-shiptracker' ); ?>
+                </a>
             </nav>
 
             <form method="post" class="fst-settings-form" autocomplete="off">
@@ -135,8 +138,14 @@ class FST_Settings {
                     <?php $this->render_advanced_tab(); ?>
                 </div>
 
-                <?php submit_button(); ?>
+                <?php if ( 'migration' !== $tab ) : ?>
+                    <?php submit_button(); ?>
+                <?php endif; ?>
             </form>
+
+            <div id="migration" class="fst-tab-content <?php echo 'migration' === $tab ? 'active' : ''; ?>">
+                <?php include FST_PLUGIN_DIR . 'admin/views/migration.php'; ?>
+            </div>
         </div>
 
         <?php

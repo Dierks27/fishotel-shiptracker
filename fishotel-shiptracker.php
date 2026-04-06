@@ -3,7 +3,7 @@
  * Plugin Name: FisHotel ShipTracker
  * Plugin URI: https://fishotel.com
  * Description: Self-hosted shipment tracking for WooCommerce. Tracks UPS & USPS packages, sends automated email notifications, and provides a branded tracking page for customers.
- * Version: 1.4.7
+ * Version: 1.4.8
  * Author: FisHotel
  * Author URI: https://fishotel.com
  * Text Domain: fishotel-shiptracker
@@ -19,7 +19,7 @@
 defined( 'ABSPATH' ) || exit;
 
 // Plugin constants
-define( 'FST_VERSION', '1.4.7' );
+define( 'FST_VERSION', '1.4.8' );
 define( 'FST_DB_VERSION', '1.0.0' );
 define( 'FST_PLUGIN_FILE', __FILE__ );
 define( 'FST_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
@@ -194,16 +194,6 @@ final class FisHotel_ShipTracker {
             'manage_woocommerce',
             'fst-analytics',
             array( $this, 'render_analytics_page' )
-        );
-
-        // Migration.
-        add_submenu_page(
-            'fst-dashboard',
-            __( 'Migration', 'fishotel-shiptracker' ),
-            __( 'Migration', 'fishotel-shiptracker' ),
-            'manage_woocommerce',
-            'fst-migration',
-            array( $this, 'render_migration_page' )
         );
 
         // Settings.
