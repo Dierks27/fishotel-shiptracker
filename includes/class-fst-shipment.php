@@ -261,14 +261,30 @@ class FST_Shipment {
     /**
      * Count shipments by status.
      *
+     * @param string $date_from Optional. Y-m-d start date.
+     * @param string $date_to   Optional. Y-m-d end date.
      * @return array status => count
      */
-    public static function count_by_status() {
+    public static function count_by_status( $date_from = '', $date_to = '' ) {
         global $wpdb;
 
-        $results = $wpdb->get_results(
-            "SELECT status, COUNT(*) as count FROM " . self::table() . " GROUP BY status"
-        );
+        $where  = "WHERE status != 'unknown'";
+        $values = array();
+
+        if ( $date_from ) {
+            $where   .= ' AND created_at >= %s';
+            $values[] = $date_from . ' 00:00:00';
+        }
+        if ( $date_to ) {
+            $where   .= ' AND created_at <= %s';
+            $values[] = $date_to . ' 23:59:59';
+        }
+
+        $sql = "SELECT status, COUNT(*) as count FROM " . self::table() . " {$where} GROUP BY status";
+
+        $results = empty( $values )
+            ? $wpdb->get_results( $sql )
+            : $wpdb->get_results( $wpdb->prepare( $sql, ...$values ) );
 
         $counts = array();
         foreach ( $results as $row ) {
@@ -355,14 +371,30 @@ class FST_Shipment {
     /**
      * Count shipments by carrier.
      *
+     * @param string $date_from Optional. Y-m-d start date.
+     * @param string $date_to   Optional. Y-m-d end date.
      * @return array carrier => count
      */
-    public static function count_by_carrier() {
+    public static function count_by_carrier( $date_from = '', $date_to = '' ) {
         global $wpdb;
 
-        $results = $wpdb->get_results(
-            "SELECT carrier, COUNT(*) as count FROM " . self::table() . " GROUP BY carrier"
-        );
+        $where  = "WHERE status != 'unknown'";
+        $values = array();
+
+        if ( $date_from ) {
+            $where   .= ' AND created_at >= %s';
+            $values[] = $date_from . ' 00:00:00';
+        }
+        if ( $date_to ) {
+            $where   .= ' AND created_at <= %s';
+            $values[] = $date_to . ' 23:59:59';
+        }
+
+        $sql = "SELECT carrier, COUNT(*) as count FROM " . self::table() . " {$where} GROUP BY carrier";
+
+        $results = empty( $values )
+            ? $wpdb->get_results( $sql )
+            : $wpdb->get_results( $wpdb->prepare( $sql, ...$values ) );
 
         $counts = array();
         foreach ( $results as $row ) {
@@ -372,41 +404,62 @@ class FST_Shipment {
     }
 
     /**
-     * Get shipment counts per day for the last N days.
+     * Get shipment counts per day within a date range.
      *
-     * @param int $days Number of days to look back.
+     * @param string $date_from Y-m-d start date.
+     * @param string $date_to   Y-m-d end date.
      * @return array [ { date, count } ]
      */
-    public static function count_per_day( $days = 30 ) {
+    public static function count_per_day( $date_from = '', $date_to = '' ) {
         global $wpdb;
+
+        if ( ! $date_from ) {
+            $date_from = date( 'Y-m-d', strtotime( '-30 days', current_time( 'timestamp' ) ) );
+        }
+        if ( ! $date_to ) {
+            $date_to = current_time( 'Y-m-d' );
+        }
 
         return $wpdb->get_results( $wpdb->prepare(
             "SELECT DATE(created_at) as date, COUNT(*) as count
              FROM " . self::table() . "
-             WHERE created_at >= DATE_SUB(%s, INTERVAL %d DAY)
+             WHERE status != 'unknown'
+             AND created_at >= %s
+             AND created_at <= %s
              GROUP BY DATE(created_at)
              ORDER BY date ASC",
-            current_time( 'mysql' ),
-            $days
+            $date_from . ' 00:00:00',
+            $date_to . ' 23:59:59'
         ) );
     }
 
     /**
      * Get average delivery time in days (ship_date to delivered_date).
      *
+     * @param string $date_from Optional. Y-m-d start date.
+     * @param string $date_to   Optional. Y-m-d end date.
      * @return float|null Average days, or null if no data.
      */
-    public static function avg_delivery_days() {
+    public static function avg_delivery_days( $date_from = '', $date_to = '' ) {
         global $wpdb;
 
-        $avg = $wpdb->get_var(
-            "SELECT AVG(DATEDIFF(delivered_date, ship_date))
-             FROM " . self::table() . "
-             WHERE status = 'delivered'
-             AND delivered_date IS NOT NULL
-             AND ship_date IS NOT NULL
-             AND delivered_date > ship_date"
-        );
+        $where  = "WHERE status = 'delivered' AND delivered_date IS NOT NULL AND ship_date IS NOT NULL AND delivered_date > ship_date";
+        $values = array();
+
+        if ( $date_from ) {
+            $where   .= ' AND created_at >= %s';
+            $values[] = $date_from . ' 00:00:00';
+        }
+        if ( $date_to ) {
+            $where   .= ' AND created_at <= %s';
+            $values[] = $date_to . ' 23:59:59';
+        }
+
+        $sql = "SELECT AVG(DATEDIFF(delivered_date, ship_date)) FROM " . self::table() . " {$where}";
+
+        $avg = empty( $values )
+            ? $wpdb->get_var( $sql )
+            : $wpdb->get_var( $wpdb->prepare( $sql, ...$values ) );
 
         return null !== $avg ? round( (float) $avg, 1 ) : null;
     }
@@ -414,20 +467,31 @@ class FST_Shipment {
     /**
      * Get average delivery time by carrier.
      *
+     * @param string $date_from Optional. Y-m-d start date.
+     * @param string $date_to   Optional. Y-m-d end date.
      * @return array carrier => avg_days
      */
-    public static function avg_delivery_days_by_carrier() {
+    public static function avg_delivery_days_by_carrier( $date_from = '', $date_to = '' ) {
         global $wpdb;
 
-        $results = $wpdb->get_results(
-            "SELECT carrier, AVG(DATEDIFF(delivered_date, ship_date)) as avg_days, COUNT(*) as count
-             FROM " . self::table() . "
-             WHERE status = 'delivered'
-             AND delivered_date IS NOT NULL
-             AND ship_date IS NOT NULL
-             AND delivered_date > ship_date
-             GROUP BY carrier"
-        );
+        $where  = "WHERE status = 'delivered' AND delivered_date IS NOT NULL AND ship_date IS NOT NULL AND delivered_date > ship_date";
+        $values = array();
+
+        if ( $date_from ) {
+            $where   .= ' AND created_at >= %s';
+            $values[] = $date_from . ' 00:00:00';
+        }
+        if ( $date_to ) {
+            $where   .= ' AND created_at <= %s';
+            $values[] = $date_to . ' 23:59:59';
+        }
+
+        $sql = "SELECT carrier, AVG(DATEDIFF(delivered_date, ship_date)) as avg_days, COUNT(*) as count
+                FROM " . self::table() . " {$where} GROUP BY carrier";
+
+        $results = empty( $values )
+            ? $wpdb->get_results( $sql )
+            : $wpdb->get_results( $wpdb->prepare( $sql, ...$values ) );
 
         $data = array();
         foreach ( $results as $row ) {
@@ -440,24 +504,33 @@ class FST_Shipment {
     }
 
     /**
-     * Get delivery counts per day for the last N days.
+     * Get delivery counts per day within a date range.
      *
-     * @param int $days Number of days to look back.
+     * @param string $date_from Y-m-d start date.
+     * @param string $date_to   Y-m-d end date.
      * @return array [ { date, count } ]
      */
-    public static function deliveries_per_day( $days = 30 ) {
+    public static function deliveries_per_day( $date_from = '', $date_to = '' ) {
         global $wpdb;
+
+        if ( ! $date_from ) {
+            $date_from = date( 'Y-m-d', strtotime( '-30 days', current_time( 'timestamp' ) ) );
+        }
+        if ( ! $date_to ) {
+            $date_to = current_time( 'Y-m-d' );
+        }
 
         return $wpdb->get_results( $wpdb->prepare(
             "SELECT DATE(delivered_date) as date, COUNT(*) as count
              FROM " . self::table() . "
              WHERE status = 'delivered'
              AND delivered_date IS NOT NULL
-             AND delivered_date >= DATE_SUB(%s, INTERVAL %d DAY)
+             AND delivered_date >= %s
+             AND delivered_date <= %s
              GROUP BY DATE(delivered_date)
              ORDER BY date ASC",
-            current_time( 'mysql' ),
-            $days
+            $date_from . ' 00:00:00',
+            $date_to . ' 23:59:59'
         ) );
     }
 }

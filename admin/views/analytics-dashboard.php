@@ -8,20 +8,76 @@
 
 defined( 'ABSPATH' ) || exit;
 
-// Gather all analytics data.
-$status_counts    = FST_Shipment::count_by_status();
-$carrier_counts   = FST_Shipment::count_by_carrier();
+// Handle date range selection.
+$range_preset = isset( $_GET['fst_range'] ) ? sanitize_text_field( $_GET['fst_range'] ) : '30d';
+$date_from    = isset( $_GET['fst_from'] ) ? sanitize_text_field( $_GET['fst_from'] ) : '';
+$date_to      = isset( $_GET['fst_to'] ) ? sanitize_text_field( $_GET['fst_to'] ) : '';
+
+// Calculate dates from preset if not custom.
+$today = current_time( 'Y-m-d' );
+if ( 'custom' !== $range_preset ) {
+    $date_to = $today;
+    switch ( $range_preset ) {
+        case '7d':
+            $date_from = date( 'Y-m-d', strtotime( '-7 days', current_time( 'timestamp' ) ) );
+            break;
+        case '30d':
+            $date_from = date( 'Y-m-d', strtotime( '-30 days', current_time( 'timestamp' ) ) );
+            break;
+        case '90d':
+            $date_from = date( 'Y-m-d', strtotime( '-90 days', current_time( 'timestamp' ) ) );
+            break;
+        case '6m':
+            $date_from = date( 'Y-m-d', strtotime( '-6 months', current_time( 'timestamp' ) ) );
+            break;
+        case '1y':
+            $date_from = date( 'Y-m-d', strtotime( '-1 year', current_time( 'timestamp' ) ) );
+            break;
+        case 'all':
+            $date_from = '';
+            $date_to   = '';
+            break;
+        default:
+            $date_from = date( 'Y-m-d', strtotime( '-30 days', current_time( 'timestamp' ) ) );
+            break;
+    }
+}
+
+// Validate custom dates.
+if ( 'custom' === $range_preset ) {
+    if ( ! preg_match( '/^\d{4}-\d{2}-\d{2}$/', $date_from ) ) {
+        $date_from = date( 'Y-m-d', strtotime( '-30 days', current_time( 'timestamp' ) ) );
+    }
+    if ( ! preg_match( '/^\d{4}-\d{2}-\d{2}$/', $date_to ) ) {
+        $date_to = $today;
+    }
+}
+
+// Gather analytics data with date range and unknown excluded.
+$status_counts    = FST_Shipment::count_by_status( $date_from, $date_to );
+$carrier_counts   = FST_Shipment::count_by_carrier( $date_from, $date_to );
 $late_shipments   = FST_Shipment::get_late_shipments();
 $late_count       = count( $late_shipments );
 $total            = array_sum( $status_counts );
 $delivered        = isset( $status_counts['delivered'] ) ? $status_counts['delivered'] : 0;
 $success_rate     = $total > 0 ? round( ( $delivered / $total ) * 100 ) : 0;
-$avg_days         = FST_Shipment::avg_delivery_days();
-$avg_by_carrier   = FST_Shipment::avg_delivery_days_by_carrier();
-$shipments_30d    = FST_Shipment::count_per_day( 30 );
-$deliveries_30d   = FST_Shipment::deliveries_per_day( 30 );
+$avg_days         = FST_Shipment::avg_delivery_days( $date_from, $date_to );
+$avg_by_carrier   = FST_Shipment::avg_delivery_days_by_carrier( $date_from, $date_to );
+$shipments_range  = FST_Shipment::count_per_day( $date_from, $date_to );
+$deliveries_range = FST_Shipment::deliveries_per_day( $date_from, $date_to );
 
-// Build daily data for the chart (last 30 days).
+// Build daily data for the chart.
+$chart_from = $date_from ? $date_from : null;
+$chart_to   = $date_to ? $date_to : $today;
+
+// If no start date (all time), find the earliest shipment date from results.
+if ( ! $chart_from && ! empty( $shipments_range ) ) {
+    $chart_from = $shipments_range[0]->date;
+}
+if ( ! $chart_from ) {
+    $chart_from = date( 'Y-m-d', strtotime( '-30 days', current_time( 'timestamp' ) ) );
+}
+
 $chart_dates     = array();
 $chart_shipped   = array();
 $chart_delivered = array();
@@ -29,29 +85,106 @@ $max_daily       = 1;
 
 $shipped_by_date   = array();
 $delivered_by_date = array();
-foreach ( $shipments_30d as $row ) {
+foreach ( $shipments_range as $row ) {
     $shipped_by_date[ $row->date ] = (int) $row->count;
 }
-foreach ( $deliveries_30d as $row ) {
+foreach ( $deliveries_range as $row ) {
     $delivered_by_date[ $row->date ] = (int) $row->count;
 }
 
-for ( $i = 29; $i >= 0; $i-- ) {
-    $date = date( 'Y-m-d', strtotime( "-{$i} days", current_time( 'timestamp' ) ) );
-    $s    = isset( $shipped_by_date[ $date ] ) ? $shipped_by_date[ $date ] : 0;
-    $d    = isset( $delivered_by_date[ $date ] ) ? $delivered_by_date[ $date ] : 0;
+// Calculate number of days in range.
+$range_days = max( 1, (int) ceil( ( strtotime( $chart_to ) - strtotime( $chart_from ) ) / DAY_IN_SECONDS ) + 1 );
 
-    $chart_dates[]     = date( 'M j', strtotime( $date ) );
-    $chart_shipped[]   = $s;
-    $chart_delivered[] = $d;
+// For very long ranges, aggregate into buckets to keep the chart readable.
+$max_bars    = 60;
+$bucket_size = max( 1, (int) ceil( $range_days / $max_bars ) );
+$bar_count   = (int) ceil( $range_days / $bucket_size );
 
-    $max_daily = max( $max_daily, $s, $d );
+for ( $b = 0; $b < $bar_count; $b++ ) {
+    $bucket_offset = $b * $bucket_size;
+    $bucket_start  = date( 'Y-m-d', strtotime( "+{$bucket_offset} days", strtotime( $chart_from ) ) );
+    $s_total = 0;
+    $d_total = 0;
+
+    for ( $d = 0; $d < $bucket_size; $d++ ) {
+        $day_offset = $bucket_offset + $d;
+        $date = date( 'Y-m-d', strtotime( "+{$day_offset} days", strtotime( $chart_from ) ) );
+        if ( $date > $chart_to ) break;
+        $s_total += isset( $shipped_by_date[ $date ] ) ? $shipped_by_date[ $date ] : 0;
+        $d_total += isset( $delivered_by_date[ $date ] ) ? $delivered_by_date[ $date ] : 0;
+    }
+
+    if ( $bucket_size > 1 ) {
+        $bucket_end = date( 'Y-m-d', strtotime( '+' . ( $bucket_offset + $bucket_size - 1 ) . ' days', strtotime( $chart_from ) ) );
+        if ( $bucket_end > $chart_to ) $bucket_end = $chart_to;
+        $chart_dates[] = date( 'M j', strtotime( $bucket_start ) ) . '-' . date( 'j', strtotime( $bucket_end ) );
+    } else {
+        $chart_dates[] = date( 'M j', strtotime( $bucket_start ) );
+    }
+
+    $chart_shipped[]   = $s_total;
+    $chart_delivered[] = $d_total;
+    $max_daily = max( $max_daily, $s_total, $d_total );
 }
+
+// Build range label for display.
+if ( $date_from && $date_to ) {
+    $range_label = date_i18n( get_option( 'date_format' ), strtotime( $date_from ) ) . ' &ndash; ' . date_i18n( get_option( 'date_format' ), strtotime( $date_to ) );
+} else {
+    $range_label = __( 'All Time', 'fishotel-shiptracker' );
+}
+
+// Current page URL for form action.
+$page_url = admin_url( 'admin.php?page=fishotel-shiptracker-analytics' );
 
 ?>
 
 <div class="wrap">
     <h1><?php esc_html_e( 'Analytics', 'fishotel-shiptracker' ); ?></h1>
+
+    <!-- Date Range Selector -->
+    <div style="background: #fff; padding: 14px 20px; border: 1px solid #ccd0d4; border-radius: 6px; margin: 16px 0; display: flex; align-items: center; flex-wrap: wrap; gap: 10px;">
+        <span style="font-weight: 600; font-size: 13px; color: #333; margin-right: 4px;"><?php esc_html_e( 'Date Range:', 'fishotel-shiptracker' ); ?></span>
+
+        <?php
+        $presets = array(
+            '7d'  => __( '7 Days', 'fishotel-shiptracker' ),
+            '30d' => __( '30 Days', 'fishotel-shiptracker' ),
+            '90d' => __( '90 Days', 'fishotel-shiptracker' ),
+            '6m'  => __( '6 Months', 'fishotel-shiptracker' ),
+            '1y'  => __( '1 Year', 'fishotel-shiptracker' ),
+            'all' => __( 'All Time', 'fishotel-shiptracker' ),
+        );
+        foreach ( $presets as $pkey => $plabel ) :
+            $active = ( $range_preset === $pkey );
+        ?>
+            <a href="<?php echo esc_url( add_query_arg( array( 'fst_range' => $pkey ), $page_url ) ); ?>"
+               style="padding: 6px 14px; border-radius: 4px; text-decoration: none; font-size: 13px; font-weight: 500;
+                      <?php echo $active
+                          ? 'background: #0073aa; color: #fff;'
+                          : 'background: #f0f0f0; color: #333;'; ?>">
+                <?php echo esc_html( $plabel ); ?>
+            </a>
+        <?php endforeach; ?>
+
+        <span style="color: #ccc; margin: 0 4px;">|</span>
+
+        <form method="get" action="<?php echo esc_url( $page_url ); ?>" style="display: flex; align-items: center; gap: 6px; margin: 0;">
+            <input type="hidden" name="page" value="fishotel-shiptracker-analytics" />
+            <input type="hidden" name="fst_range" value="custom" />
+            <input type="date" name="fst_from" value="<?php echo esc_attr( $date_from ); ?>"
+                   style="padding: 4px 8px; border: 1px solid #ccd0d4; border-radius: 4px; font-size: 13px;" />
+            <span style="color: #666;">&ndash;</span>
+            <input type="date" name="fst_to" value="<?php echo esc_attr( $date_to ); ?>"
+                   style="padding: 4px 8px; border: 1px solid #ccd0d4; border-radius: 4px; font-size: 13px;" />
+            <button type="submit" class="button button-small" style="padding: 4px 12px;"><?php esc_html_e( 'Apply', 'fishotel-shiptracker' ); ?></button>
+        </form>
+    </div>
+
+    <p style="color: #666; font-size: 12px; margin: -8px 0 16px;">
+        <?php echo wp_kses( $range_label, array( 'span' => array() ) ); ?>
+        &mdash; <?php esc_html_e( 'shipments with "Unknown" status are excluded from all stats.', 'fishotel-shiptracker' ); ?>
+    </p>
 
     <!-- Top KPI Cards -->
     <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 16px; margin: 20px 0;">
@@ -84,16 +217,16 @@ for ( $i = 29; $i >= 0; $i-- ) {
     <!-- Charts Row -->
     <div style="display: grid; grid-template-columns: 2fr 1fr; gap: 20px; margin-bottom: 20px;">
 
-        <!-- Shipment Volume Chart (last 30 days) -->
+        <!-- Shipment Volume Chart -->
         <div style="background: #fff; padding: 20px; border: 1px solid #ccd0d4; border-radius: 6px;">
-            <h3 style="margin: 0 0 16px;"><?php esc_html_e( 'Shipment Volume (Last 30 Days)', 'fishotel-shiptracker' ); ?></h3>
+            <h3 style="margin: 0 0 16px;"><?php esc_html_e( 'Shipment Volume', 'fishotel-shiptracker' ); ?></h3>
             <?php if ( array_sum( $chart_shipped ) > 0 || array_sum( $chart_delivered ) > 0 ) : ?>
                 <div style="display: flex; gap: 16px; font-size: 12px; margin-bottom: 10px;">
                     <span><span style="display: inline-block; width: 12px; height: 12px; background: #0073aa; border-radius: 2px; margin-right: 4px;"></span><?php esc_html_e( 'Created', 'fishotel-shiptracker' ); ?></span>
                     <span><span style="display: inline-block; width: 12px; height: 12px; background: #1e7e34; border-radius: 2px; margin-right: 4px;"></span><?php esc_html_e( 'Delivered', 'fishotel-shiptracker' ); ?></span>
                 </div>
                 <div style="display: flex; align-items: flex-end; gap: 2px; height: 160px; border-bottom: 1px solid #eee; padding-bottom: 4px;">
-                    <?php for ( $i = 0; $i < 30; $i++ ) :
+                    <?php for ( $i = 0; $i < count( $chart_shipped ); $i++ ) :
                         $s_pct = $max_daily > 0 ? ( $chart_shipped[ $i ] / $max_daily ) * 100 : 0;
                         $d_pct = $max_daily > 0 ? ( $chart_delivered[ $i ] / $max_daily ) * 100 : 0;
                     ?>
@@ -106,12 +239,22 @@ for ( $i = 29; $i >= 0; $i-- ) {
                     <?php endfor; ?>
                 </div>
                 <div style="display: flex; justify-content: space-between; font-size: 10px; color: #999; margin-top: 4px;">
-                    <span><?php echo esc_html( $chart_dates[0] ); ?></span>
-                    <span><?php echo esc_html( $chart_dates[14] ); ?></span>
-                    <span><?php echo esc_html( $chart_dates[29] ); ?></span>
+                    <?php
+                    $label_count = count( $chart_dates );
+                    if ( $label_count > 0 ) {
+                        echo '<span>' . esc_html( $chart_dates[0] ) . '</span>';
+                        if ( $label_count > 2 ) {
+                            $mid = (int) floor( $label_count / 2 );
+                            echo '<span>' . esc_html( $chart_dates[ $mid ] ) . '</span>';
+                        }
+                        if ( $label_count > 1 ) {
+                            echo '<span>' . esc_html( $chart_dates[ $label_count - 1 ] ) . '</span>';
+                        }
+                    }
+                    ?>
                 </div>
             <?php else : ?>
-                <p style="color: #999; text-align: center; padding: 40px 0;"><?php esc_html_e( 'No shipment data in the last 30 days.', 'fishotel-shiptracker' ); ?></p>
+                <p style="color: #999; text-align: center; padding: 40px 0;"><?php esc_html_e( 'No shipment data in this date range.', 'fishotel-shiptracker' ); ?></p>
             <?php endif; ?>
         </div>
 
@@ -129,7 +272,6 @@ for ( $i = 29; $i >= 0; $i-- ) {
                     'exception'        => 'Exception',
                     'return_to_sender' => 'Return to Sender',
                     'failure'          => 'Failure',
-                    'unknown'          => 'Unknown',
                 );
                 foreach ( $statuses as $skey => $slabel ) :
                     $scount = isset( $status_counts[ $skey ] ) ? $status_counts[ $skey ] : 0;
