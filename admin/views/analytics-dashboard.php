@@ -220,38 +220,82 @@ $page_url = admin_url( 'admin.php?page=fst-analytics' );
         <!-- Shipment Volume Chart -->
         <div style="background: #fff; padding: 20px; border: 1px solid #ccd0d4; border-radius: 6px;">
             <h3 style="margin: 0 0 16px;"><?php esc_html_e( 'Shipment Volume', 'fishotel-shiptracker' ); ?></h3>
-            <?php if ( array_sum( $chart_shipped ) > 0 || array_sum( $chart_delivered ) > 0 ) : ?>
+            <?php if ( array_sum( $chart_shipped ) > 0 || array_sum( $chart_delivered ) > 0 ) :
+                // Calculate nice Y-axis ticks.
+                $y_max = $max_daily;
+                if ( $y_max <= 5 ) {
+                    $y_step = 1;
+                } elseif ( $y_max <= 20 ) {
+                    $y_step = 5;
+                } elseif ( $y_max <= 50 ) {
+                    $y_step = 10;
+                } else {
+                    $y_step = (int) ceil( $y_max / 5 / 10 ) * 10;
+                }
+                $y_top   = (int) ceil( $y_max / $y_step ) * $y_step;
+                if ( $y_top < 1 ) $y_top = 1;
+                $y_ticks = array();
+                for ( $t = $y_top; $t >= 0; $t -= $y_step ) {
+                    $y_ticks[] = $t;
+                }
+            ?>
                 <div style="display: flex; gap: 16px; font-size: 12px; margin-bottom: 10px;">
                     <span><span style="display: inline-block; width: 12px; height: 12px; background: #0073aa; border-radius: 2px; margin-right: 4px;"></span><?php esc_html_e( 'Created', 'fishotel-shiptracker' ); ?></span>
                     <span><span style="display: inline-block; width: 12px; height: 12px; background: #1e7e34; border-radius: 2px; margin-right: 4px;"></span><?php esc_html_e( 'Delivered', 'fishotel-shiptracker' ); ?></span>
                 </div>
-                <div style="display: flex; align-items: flex-end; gap: 2px; height: 160px; border-bottom: 1px solid #eee; padding-bottom: 4px;">
-                    <?php for ( $i = 0; $i < count( $chart_shipped ); $i++ ) :
-                        $s_pct = $max_daily > 0 ? ( $chart_shipped[ $i ] / $max_daily ) * 100 : 0;
-                        $d_pct = $max_daily > 0 ? ( $chart_delivered[ $i ] / $max_daily ) * 100 : 0;
-                    ?>
-                        <div style="flex: 1; display: flex; flex-direction: column; align-items: center; gap: 1px;" title="<?php echo esc_attr( $chart_dates[ $i ] . ': ' . $chart_shipped[ $i ] . ' created, ' . $chart_delivered[ $i ] . ' delivered' ); ?>">
-                            <div style="width: 100%; display: flex; align-items: flex-end; gap: 1px; height: 100%;">
-                                <div style="flex: 1; background: #0073aa; border-radius: 1px 1px 0 0; min-height: <?php echo $chart_shipped[ $i ] > 0 ? '2' : '0'; ?>px; height: <?php echo esc_attr( $s_pct ); ?>%;"></div>
-                                <div style="flex: 1; background: #1e7e34; border-radius: 1px 1px 0 0; min-height: <?php echo $chart_delivered[ $i ] > 0 ? '2' : '0'; ?>px; height: <?php echo esc_attr( $d_pct ); ?>%;"></div>
+                <div style="display: flex; height: 220px;">
+                    <!-- Y-axis labels -->
+                    <div style="display: flex; flex-direction: column; justify-content: space-between; padding-right: 8px; padding-bottom: 20px;">
+                        <?php foreach ( $y_ticks as $tick ) : ?>
+                            <span style="font-size: 11px; color: #999; text-align: right; min-width: 24px; line-height: 1;"><?php echo esc_html( $tick ); ?></span>
+                        <?php endforeach; ?>
+                    </div>
+                    <!-- Chart area -->
+                    <div style="flex: 1; display: flex; flex-direction: column;">
+                        <div style="flex: 1; position: relative; border-left: 1px solid #ddd; border-bottom: 1px solid #ddd;">
+                            <!-- Gridlines -->
+                            <?php foreach ( $y_ticks as $idx => $tick ) :
+                                $line_pct = $y_top > 0 ? ( $tick / $y_top ) * 100 : 0;
+                            ?>
+                                <div style="position: absolute; left: 0; right: 0; bottom: <?php echo esc_attr( $line_pct ); ?>%; border-top: 1px solid #f0f0f0; z-index: 0;"></div>
+                            <?php endforeach; ?>
+                            <!-- Bars -->
+                            <div style="position: absolute; left: 0; right: 0; bottom: 0; top: 0; display: flex; align-items: flex-end; gap: 3px; padding: 0 4px; z-index: 1;">
+                                <?php for ( $i = 0; $i < count( $chart_shipped ); $i++ ) :
+                                    $s_pct = $y_top > 0 ? ( $chart_shipped[ $i ] / $y_top ) * 100 : 0;
+                                    $d_pct = $y_top > 0 ? ( $chart_delivered[ $i ] / $y_top ) * 100 : 0;
+                                    $bar_total = $chart_shipped[ $i ] + $chart_delivered[ $i ];
+                                ?>
+                                    <div style="flex: 1; display: flex; flex-direction: column; align-items: center; height: 100%; justify-content: flex-end;"
+                                         title="<?php echo esc_attr( $chart_dates[ $i ] . ': ' . $chart_shipped[ $i ] . ' created, ' . $chart_delivered[ $i ] . ' delivered' ); ?>">
+                                        <?php if ( $bar_total > 0 ) : ?>
+                                            <span style="font-size: 9px; color: #666; font-weight: 600; margin-bottom: 2px;"><?php echo esc_html( $bar_total ); ?></span>
+                                        <?php endif; ?>
+                                        <div style="width: 100%; display: flex; gap: 1px; align-items: flex-end;">
+                                            <div style="flex: 1; background: #0073aa; border-radius: 2px 2px 0 0; min-height: <?php echo $chart_shipped[ $i ] > 0 ? '4' : '0'; ?>px; height: <?php echo esc_attr( $s_pct ); ?>%;"></div>
+                                            <div style="flex: 1; background: #1e7e34; border-radius: 2px 2px 0 0; min-height: <?php echo $chart_delivered[ $i ] > 0 ? '4' : '0'; ?>px; height: <?php echo esc_attr( $d_pct ); ?>%;"></div>
+                                        </div>
+                                    </div>
+                                <?php endfor; ?>
                             </div>
                         </div>
-                    <?php endfor; ?>
-                </div>
-                <div style="display: flex; justify-content: space-between; font-size: 10px; color: #999; margin-top: 4px;">
-                    <?php
-                    $label_count = count( $chart_dates );
-                    if ( $label_count > 0 ) {
-                        echo '<span>' . esc_html( $chart_dates[0] ) . '</span>';
-                        if ( $label_count > 2 ) {
-                            $mid = (int) floor( $label_count / 2 );
-                            echo '<span>' . esc_html( $chart_dates[ $mid ] ) . '</span>';
-                        }
-                        if ( $label_count > 1 ) {
-                            echo '<span>' . esc_html( $chart_dates[ $label_count - 1 ] ) . '</span>';
-                        }
-                    }
-                    ?>
+                        <!-- X-axis dates -->
+                        <div style="display: flex; justify-content: space-between; font-size: 10px; color: #999; margin-top: 4px; padding-left: 4px; padding-right: 4px;">
+                            <?php
+                            $label_count = count( $chart_dates );
+                            if ( $label_count > 0 ) {
+                                echo '<span>' . esc_html( $chart_dates[0] ) . '</span>';
+                                if ( $label_count > 2 ) {
+                                    $mid = (int) floor( $label_count / 2 );
+                                    echo '<span>' . esc_html( $chart_dates[ $mid ] ) . '</span>';
+                                }
+                                if ( $label_count > 1 ) {
+                                    echo '<span>' . esc_html( $chart_dates[ $label_count - 1 ] ) . '</span>';
+                                }
+                            }
+                            ?>
+                        </div>
+                    </div>
                 </div>
             <?php else : ?>
                 <p style="color: #999; text-align: center; padding: 40px 0;"><?php esc_html_e( 'No shipment data in this date range.', 'fishotel-shiptracker' ); ?></p>
