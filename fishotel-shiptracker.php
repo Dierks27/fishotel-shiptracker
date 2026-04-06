@@ -3,7 +3,7 @@
  * Plugin Name: FisHotel ShipTracker
  * Plugin URI: https://fishotel.com
  * Description: Self-hosted shipment tracking for WooCommerce. Tracks UPS & USPS packages, sends automated email notifications, and provides a branded tracking page for customers.
- * Version: 1.4.8
+ * Version: 1.5.0
  * Author: FisHotel
  * Author URI: https://fishotel.com
  * Text Domain: fishotel-shiptracker
@@ -19,7 +19,7 @@
 defined( 'ABSPATH' ) || exit;
 
 // Plugin constants
-define( 'FST_VERSION', '1.4.8' );
+define( 'FST_VERSION', '1.5.0' );
 define( 'FST_DB_VERSION', '1.0.0' );
 define( 'FST_PLUGIN_FILE', __FILE__ );
 define( 'FST_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
@@ -131,6 +131,9 @@ final class FisHotel_ShipTracker {
 
         // Enqueue admin assets.
         add_action( 'admin_enqueue_scripts', array( $this, 'admin_assets' ) );
+
+        // Admin dashboard widget.
+        add_action( 'wp_dashboard_setup', array( $this, 'add_dashboard_widget' ) );
 
         // Declare HPOS compatibility.
         add_action( 'before_woocommerce_init', function() {
@@ -264,6 +267,125 @@ final class FisHotel_ShipTracker {
      */
     public function render_migration_page() {
         include FST_PLUGIN_DIR . 'admin/views/migration.php';
+    }
+
+    /**
+     * Register the admin dashboard widget.
+     */
+    public function add_dashboard_widget() {
+        if ( ! current_user_can( 'manage_woocommerce' ) ) {
+            return;
+        }
+        wp_add_dashboard_widget(
+            'fst_shipment_overview',
+            __( 'ShipTracker - Active Shipments', 'fishotel-shiptracker' ),
+            array( $this, 'render_dashboard_widget' )
+        );
+    }
+
+    /**
+     * Render the admin dashboard widget content.
+     */
+    public function render_dashboard_widget() {
+        $counts = FST_Shipment::count_by_status();
+        $late   = FST_Shipment::get_late_shipments();
+
+        $statuses = array(
+            'in_transit'       => array( 'label' => 'In Transit',       'color' => '#0073aa' ),
+            'out_for_delivery' => array( 'label' => 'Out for Delivery', 'color' => '#17a2b8' ),
+            'exception'        => array( 'label' => 'Exception',        'color' => '#dc3545' ),
+            'return_to_sender' => array( 'label' => 'Return to Sender', 'color' => '#dc3545' ),
+            'delivered'        => array( 'label' => 'Delivered',         'color' => '#1e7e34' ),
+            'pre_transit'      => array( 'label' => 'Pre-Transit',      'color' => '#6c757d' ),
+        );
+
+        $active_count = 0;
+        foreach ( array( 'in_transit', 'out_for_delivery', 'pre_transit' ) as $s ) {
+            $active_count += isset( $counts[ $s ] ) ? $counts[ $s ] : 0;
+        }
+        $exception_count = isset( $counts['exception'] ) ? $counts['exception'] : 0;
+        $late_count      = count( $late );
+        $base_url        = admin_url( 'admin.php?page=fst-dashboard' );
+
+        // Needs attention section.
+        if ( $exception_count > 0 || $late_count > 0 ) : ?>
+            <div style="background: #fff8f8; border: 1px solid #f5c6cb; border-left: 4px solid #dc3545; padding: 10px 14px; margin-bottom: 14px; border-radius: 3px;">
+                <strong style="color: #dc3545;"><?php esc_html_e( 'Needs Attention', 'fishotel-shiptracker' ); ?></strong>
+                <div style="margin-top: 6px; font-size: 13px;">
+                    <?php if ( $exception_count > 0 ) : ?>
+                        <div style="margin-bottom: 4px;">
+                            <a href="<?php echo esc_url( $base_url . '&status=exception' ); ?>" style="color: #dc3545; font-weight: 600;">
+                                <?php printf( esc_html__( '%d shipment exception(s)', 'fishotel-shiptracker' ), $exception_count ); ?>
+                            </a>
+                        </div>
+                    <?php endif; ?>
+                    <?php if ( $late_count > 0 ) : ?>
+                        <div>
+                            <span style="color: #dc3545; font-weight: 600;">
+                                <?php printf( esc_html__( '%d late shipment(s)', 'fishotel-shiptracker' ), $late_count ); ?>
+                            </span>
+                        </div>
+                    <?php endif; ?>
+                </div>
+            </div>
+        <?php endif; ?>
+
+        <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 14px;">
+            <?php foreach ( $statuses as $skey => $sinfo ) :
+                $scount = isset( $counts[ $skey ] ) ? $counts[ $skey ] : 0;
+                if ( 0 === $scount && in_array( $skey, array( 'return_to_sender', 'pre_transit' ), true ) ) continue;
+            ?>
+                <a href="<?php echo esc_url( $base_url . '&status=' . $skey ); ?>" style="text-decoration: none;">
+                    <div style="text-align: center; padding: 10px 6px; background: #f9f9f9; border-radius: 4px; border: 1px solid #eee;">
+                        <div style="font-size: 22px; font-weight: 700; color: <?php echo esc_attr( $sinfo['color'] ); ?>; line-height: 1.2;"><?php echo esc_html( $scount ); ?></div>
+                        <div style="font-size: 11px; color: #666; margin-top: 2px;"><?php echo esc_html( $sinfo['label'] ); ?></div>
+                    </div>
+                </a>
+            <?php endforeach; ?>
+        </div>
+
+        <?php
+        // Show the last few delivered shipments.
+        $recent = FST_Shipment::query( array(
+            'status'   => 'delivered',
+            'per_page' => 5,
+            'page'     => 1,
+            'orderby'  => 'updated_at',
+            'order'    => 'DESC',
+        ) );
+
+        if ( ! empty( $recent['items'] ) ) : ?>
+            <h4 style="margin: 14px 0 8px; font-size: 12px; text-transform: uppercase; color: #666; letter-spacing: 0.5px;">
+                <?php esc_html_e( 'Recently Delivered', 'fishotel-shiptracker' ); ?>
+            </h4>
+            <table style="width: 100%; font-size: 12px; border-collapse: collapse;">
+                <?php foreach ( $recent['items'] as $ship ) :
+                    $order = wc_get_order( $ship->order_id );
+                ?>
+                <tr style="border-bottom: 1px solid #f0f0f0;">
+                    <td style="padding: 6px 4px;">
+                        <?php if ( $order ) : ?>
+                            <a href="<?php echo esc_url( $order->get_edit_order_url() ); ?>">#<?php echo esc_html( $order->get_order_number() ); ?></a>
+                        <?php else : ?>
+                            #<?php echo esc_html( $ship->order_id ); ?>
+                        <?php endif; ?>
+                    </td>
+                    <td style="padding: 6px 4px; color: #666;">
+                        <?php echo esc_html( strtoupper( $ship->carrier ) ); ?>
+                    </td>
+                    <td style="padding: 6px 4px; color: #999; text-align: right;">
+                        <?php echo $ship->delivered_date ? esc_html( date_i18n( 'M j', strtotime( $ship->delivered_date ) ) ) : '&mdash;'; ?>
+                    </td>
+                </tr>
+                <?php endforeach; ?>
+            </table>
+        <?php endif; ?>
+
+        <p style="margin: 14px 0 0; text-align: center;">
+            <a href="<?php echo esc_url( $base_url ); ?>" class="button button-small"><?php esc_html_e( 'View All Shipments', 'fishotel-shiptracker' ); ?></a>
+            <a href="<?php echo esc_url( admin_url( 'admin.php?page=fst-analytics' ) ); ?>" class="button button-small"><?php esc_html_e( 'Analytics', 'fishotel-shiptracker' ); ?></a>
+        </p>
+        <?php
     }
 
     /**

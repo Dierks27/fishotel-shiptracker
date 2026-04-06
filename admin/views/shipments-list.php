@@ -114,29 +114,50 @@ function fst_is_shipment_late( $shipment ) {
 <div class="wrap">
     <h1><?php esc_html_e( 'Shipments', 'fishotel-shiptracker' ); ?></h1>
 
-    <!-- Status Summary Cards -->
-    <div class="fst-status-cards" style="display: flex; gap: 10px; margin-bottom: 20px; flex-wrap: wrap;">
-        <div class="fst-status-card" style="background: #fff; padding: 15px 20px; border: 1px solid #ccd0d4; border-radius: 4px; min-width: 100px; text-align: center;">
-            <h3 style="margin: 0 0 5px 0; font-size: 13px; color: #666;"><?php esc_html_e( 'Total', 'fishotel-shiptracker' ); ?></h3>
-            <div class="count" style="font-size: 24px; font-weight: 700; color: #0073aa;"><?php echo esc_html( array_sum( $status_counts ) ); ?></div>
-        </div>
-        <?php
-        $card_statuses = array(
-            'in_transit'       => 'In Transit',
-            'out_for_delivery' => 'Out for Delivery',
-            'delivered'        => 'Delivered',
-            'exception'        => 'Exception',
-        );
-        foreach ( $card_statuses as $skey => $slabel ) :
-            $scount = isset( $status_counts[ $skey ] ) ? $status_counts[ $skey ] : 0;
-        ?>
-        <div class="fst-status-card" style="background: #fff; padding: 15px 20px; border: 1px solid #ccd0d4; border-radius: 4px; min-width: 100px; text-align: center;">
-            <h3 style="margin: 0 0 5px 0; font-size: 13px; color: #666;"><?php echo esc_html( $slabel ); ?></h3>
-            <div class="count" style="font-size: 24px; font-weight: 700; color: <?php echo esc_attr( FST_Carrier::get_status_color( $skey ) ); ?>;">
-                <?php echo esc_html( $scount ); ?>
+    <!-- Active Shipments Overview -->
+    <?php
+    $active_statuses = array(
+        'in_transit'       => array( 'label' => 'In Transit',       'icon' => '&#128666;' ),
+        'out_for_delivery' => array( 'label' => 'Out for Delivery', 'icon' => '&#128230;' ),
+        'exception'        => array( 'label' => 'Exception',        'icon' => '&#9888;' ),
+        'return_to_sender' => array( 'label' => 'Returned',         'icon' => '&#8617;' ),
+    );
+    $in_transit_count = isset( $status_counts['in_transit'] ) ? $status_counts['in_transit'] : 0;
+    $ofd_count        = isset( $status_counts['out_for_delivery'] ) ? $status_counts['out_for_delivery'] : 0;
+    $exception_count  = isset( $status_counts['exception'] ) ? $status_counts['exception'] : 0;
+    $active_total     = $in_transit_count + $ofd_count + $exception_count;
+    $delivered_count  = isset( $status_counts['delivered'] ) ? $status_counts['delivered'] : 0;
+    $base_url         = admin_url( 'admin.php?page=fst-dashboard' );
+    ?>
+    <div style="display: flex; gap: 12px; margin-bottom: 20px; flex-wrap: wrap;">
+        <!-- Active shipments highlight -->
+        <a href="<?php echo esc_url( $base_url ); ?>" style="text-decoration: none; flex: 0 0 auto;">
+            <div style="background: #fff; padding: 16px 24px; border: 1px solid #ccd0d4; border-top: 3px solid #0073aa; border-radius: 4px; text-align: center; min-width: 120px; <?php echo ! $status_filter ? 'box-shadow: 0 0 0 2px #0073aa;' : ''; ?>">
+                <div style="font-size: 11px; text-transform: uppercase; color: #666; font-weight: 600; letter-spacing: 0.5px;"><?php esc_html_e( 'Active', 'fishotel-shiptracker' ); ?></div>
+                <div style="font-size: 32px; font-weight: 700; color: #0073aa; line-height: 1.2;"><?php echo esc_html( $active_total ); ?></div>
             </div>
-        </div>
+        </a>
+
+        <?php foreach ( $active_statuses as $skey => $sinfo ) :
+            $scount  = isset( $status_counts[ $skey ] ) ? $status_counts[ $skey ] : 0;
+            $color   = FST_Carrier::get_status_color( $skey );
+            $is_active = ( $status_filter === $skey );
+        ?>
+        <a href="<?php echo esc_url( $base_url . '&status=' . $skey ); ?>" style="text-decoration: none; flex: 0 0 auto;">
+            <div style="background: #fff; padding: 16px 24px; border: 1px solid #ccd0d4; border-top: 3px solid <?php echo esc_attr( $color ); ?>; border-radius: 4px; text-align: center; min-width: 120px; <?php echo $is_active ? 'box-shadow: 0 0 0 2px ' . esc_attr( $color ) . ';' : ''; ?> <?php echo ( $scount > 0 && in_array( $skey, array( 'exception', 'return_to_sender' ), true ) ) ? 'background: #fff8f8;' : ''; ?>">
+                <div style="font-size: 11px; text-transform: uppercase; color: #666; font-weight: 600; letter-spacing: 0.5px;"><?php echo esc_html( $sinfo['label'] ); ?></div>
+                <div style="font-size: 32px; font-weight: 700; color: <?php echo esc_attr( $color ); ?>; line-height: 1.2;"><?php echo esc_html( $scount ); ?></div>
+            </div>
+        </a>
         <?php endforeach; ?>
+
+        <!-- Delivered -->
+        <a href="<?php echo esc_url( $base_url . '&status=delivered' ); ?>" style="text-decoration: none; flex: 0 0 auto;">
+            <div style="background: #fff; padding: 16px 24px; border: 1px solid #ccd0d4; border-top: 3px solid #1e7e34; border-radius: 4px; text-align: center; min-width: 120px; <?php echo 'delivered' === $status_filter ? 'box-shadow: 0 0 0 2px #1e7e34;' : ''; ?>">
+                <div style="font-size: 11px; text-transform: uppercase; color: #666; font-weight: 600; letter-spacing: 0.5px;"><?php esc_html_e( 'Delivered', 'fishotel-shiptracker' ); ?></div>
+                <div style="font-size: 32px; font-weight: 700; color: #1e7e34; line-height: 1.2;"><?php echo esc_html( $delivered_count ); ?></div>
+            </div>
+        </a>
     </div>
 
     <!-- Filter Bar -->
