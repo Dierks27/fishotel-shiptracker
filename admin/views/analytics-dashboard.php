@@ -135,7 +135,7 @@ if ( $date_from && $date_to ) {
 }
 
 // Current page URL for form action.
-$page_url = admin_url( 'admin.php?page=fishotel-shiptracker-analytics' );
+$page_url = admin_url( 'admin.php?page=fst-analytics' );
 
 ?>
 
