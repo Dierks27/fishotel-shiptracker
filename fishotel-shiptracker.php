@@ -3,7 +3,7 @@
  * Plugin Name: FisHotel ShipTracker
  * Plugin URI: https://fishotel.com
  * Description: Self-hosted shipment tracking for WooCommerce. Tracks UPS & USPS packages, sends automated email notifications, and provides a branded tracking page for customers.
- * Version: 1.2.9
+ * Version: 1.3.0
  * Author: FisHotel
  * Author URI: https://fishotel.com
  * Text Domain: fishotel-shiptracker
@@ -19,7 +19,7 @@
 defined( 'ABSPATH' ) || exit;
 
 // Plugin constants
-define( 'FST_VERSION', '1.2.9' );
+define( 'FST_VERSION', '1.3.0' );
 define( 'FST_DB_VERSION', '1.0.0' );
 define( 'FST_PLUGIN_FILE', __FILE__ );
 define( 'FST_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
@@ -356,22 +356,14 @@ final class FisHotel_ShipTracker {
         $carrier = sanitize_text_field( $_POST['carrier'] ?? '' );
 
         if ( 'ups' === $carrier ) {
-            // Clear any cached token so we test fresh credentials.
             delete_transient( 'fst_ups_access_token' );
 
-            // Debug: check what's actually saved.
-            $saved_id     = get_option( 'fst_ups_client_id', '' );
-            $saved_secret = get_option( 'fst_ups_client_secret', '' );
-
-            if ( empty( $saved_id ) || empty( $saved_secret ) ) {
-                wp_send_json_error( array(
-                    'message' => 'Credentials not found in database. Client ID length: ' . strlen( $saved_id ) . ', Secret length: ' . strlen( $saved_secret ) . '. Please save settings first.',
-                ) );
+            $carrier_obj = new FST_Carrier_UPS();
+            if ( ! $carrier_obj->has_credentials() ) {
+                wp_send_json_error( array( 'message' => 'UPS credentials not configured. Please save settings first.' ) );
             }
 
-            $carrier_obj = new FST_Carrier_UPS();
             $result = $carrier_obj->get_access_token();
-
             if ( is_wp_error( $result ) ) {
                 wp_send_json_error( array( 'message' => $result->get_error_message() ) );
             }
@@ -380,18 +372,12 @@ final class FisHotel_ShipTracker {
         } elseif ( 'usps' === $carrier ) {
             delete_transient( 'fst_usps_access_token' );
 
-            $saved_id     = get_option( 'fst_usps_client_id', '' );
-            $saved_secret = get_option( 'fst_usps_client_secret', '' );
-
-            if ( empty( $saved_id ) || empty( $saved_secret ) ) {
-                wp_send_json_error( array(
-                    'message' => 'Credentials not found in database. Client ID length: ' . strlen( $saved_id ) . ', Secret length: ' . strlen( $saved_secret ) . '. Please save settings first.',
-                ) );
+            $carrier_obj = new FST_Carrier_USPS();
+            if ( ! $carrier_obj->has_credentials() ) {
+                wp_send_json_error( array( 'message' => 'USPS credentials not configured. Please save settings first.' ) );
             }
 
-            $carrier_obj = new FST_Carrier_USPS();
             $result = $carrier_obj->get_access_token();
-
             if ( is_wp_error( $result ) ) {
                 wp_send_json_error( array( 'message' => $result->get_error_message() ) );
             }
