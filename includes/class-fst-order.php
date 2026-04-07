@@ -323,7 +323,8 @@ class FST_Order {
             $new_columns[ $key ] = $label;
             // Add after order status column.
             if ( 'order_status' === $key ) {
-                $new_columns['fst_tracking'] = __( 'Tracking', 'fishotel-shiptracker' );
+                $new_columns['fst_tracking']  = __( 'Tracking', 'fishotel-shiptracker' );
+                $new_columns['fst_ship_date'] = __( 'Ship Date', 'fishotel-shiptracker' );
             }
         }
         return $new_columns;
@@ -333,17 +334,23 @@ class FST_Order {
      * Render tracking column for legacy orders (CPT).
      */
     public function render_orders_column( $column, $post_id ) {
-        if ( 'fst_tracking' !== $column ) return;
-        $this->output_tracking_column( $post_id );
+        if ( 'fst_tracking' === $column ) {
+            $this->output_tracking_column( $post_id );
+        } elseif ( 'fst_ship_date' === $column ) {
+            $this->output_ship_date_column( $post_id );
+        }
     }
 
     /**
      * Render tracking column for HPOS orders.
      */
     public function render_orders_column_hpos( $column, $order ) {
-        if ( 'fst_tracking' !== $column ) return;
         $order_id = $order instanceof WC_Order ? $order->get_id() : $order;
-        $this->output_tracking_column( $order_id );
+        if ( 'fst_tracking' === $column ) {
+            $this->output_tracking_column( $order_id );
+        } elseif ( 'fst_ship_date' === $column ) {
+            $this->output_ship_date_column( $order_id );
+        }
     }
 
     /**
@@ -363,6 +370,28 @@ class FST_Order {
             echo '<span class="fst-status-badge-small" style="background-color:' . esc_attr( $color ) . ';color:#fff;padding:2px 8px;border-radius:3px;font-size:11px;display:inline-block;margin:1px 0;">';
             echo esc_html( $label );
             echo '</span> ';
+        }
+    }
+
+    /**
+     * Output ship date for orders list column.
+     */
+    private function output_ship_date_column( $order_id ) {
+        $shipments = FST_Shipment::get_by_order( $order_id );
+
+        if ( empty( $shipments ) ) {
+            echo '<span style="color:#999;">&mdash;</span>';
+            return;
+        }
+
+        foreach ( $shipments as $shipment ) {
+            if ( ! empty( $shipment->ship_date ) ) {
+                echo '<span style="display:block;font-size:12px;white-space:nowrap;">';
+                echo esc_html( date_i18n( get_option( 'date_format' ), strtotime( $shipment->ship_date ) ) );
+                echo '</span>';
+            } else {
+                echo '<span style="color:#999;">&mdash;</span>';
+            }
         }
     }
 }
