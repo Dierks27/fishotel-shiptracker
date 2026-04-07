@@ -199,8 +199,10 @@ class FST_Updater {
         // Re-activate the plugin.
         activate_plugin( $this->slug );
 
-        // Clear the update cache so the old version doesn't linger.
+        // Clear both our cache and the WordPress update transient so the
+        // update button doesn't persist after a successful install.
         delete_transient( $this->cache_key );
+        delete_site_transient( 'update_plugins' );
 
         return $result;
     }
