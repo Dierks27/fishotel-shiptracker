@@ -400,7 +400,7 @@ class FST_Order {
         // No shipments — check for a requested shipping date in order meta.
         // Skip for refunded orders — no need to show a ship date.
         $order = wc_get_order( $order_id );
-        if ( $order && 'wc-refunded' === $order->get_status( 'edit' ) ) {
+        if ( $order && 'refunded' === $order->get_status() ) {
             echo '<span style="color:#999;">&mdash;</span>';
             return;
         }
