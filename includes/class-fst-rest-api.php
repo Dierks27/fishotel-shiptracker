@@ -153,8 +153,10 @@ class FST_REST_API {
             return new WP_REST_Response( array( 'error' => 'Order number and email required' ), 400 );
         }
 
+        $not_found = new WP_REST_Response( array( 'error' => 'No matching order found' ), 404 );
+
         // Look up order by ID (order number is usually the ID in basic WooCommerce).
-        $order = wc_get_order( $order_number );
+        $order = wc_get_order( absint( $order_number ) );
 
         // If that didn't work, search by meta.
         if ( ! $order ) {
@@ -172,12 +174,12 @@ class FST_REST_API {
         }
 
         if ( ! $order ) {
-            return new WP_REST_Response( array( 'error' => 'Order not found' ), 404 );
+            return $not_found;
         }
 
-        // Verify email.
+        // Verify email — return same error as "not found" to prevent order enumeration.
         if ( strtolower( $order->get_billing_email() ) !== strtolower( $email ) ) {
-            return new WP_REST_Response( array( 'error' => 'Email does not match' ), 403 );
+            return $not_found;
         }
 
         $shipments = FST_Shipment::get_by_order( $order->get_id() );

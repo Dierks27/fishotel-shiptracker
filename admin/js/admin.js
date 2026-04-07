@@ -85,7 +85,7 @@
 						// Clear form
 						container.find('input, select').val('');
 					} else {
-						alert('Error: ' + response.data);
+						alert('Error: ' + (response.data && response.data.message ? response.data.message : response.data));
 					}
 				}, this),
 				error: function () {
@@ -127,7 +127,7 @@
 							$(this).remove();
 						});
 					} else {
-						alert('Error: ' + response.data);
+						alert('Error: ' + (response.data && response.data.message ? response.data.message : response.data));
 					}
 				}, this),
 				error: function () {
@@ -174,7 +174,7 @@
 							'<div class="notice notice-success is-dismissible"><p>Tracking updated successfully</p></div>'
 						);
 					} else {
-						alert('Error: ' + response.data);
+						alert('Error: ' + (response.data && response.data.message ? response.data.message : response.data));
 					}
 				}, this),
 				error: function () {
@@ -209,9 +209,9 @@
 				return;
 			}
 
-			// FedEx pattern: starts with digits, contains specific patterns
-			if (/^[0-9]{12,14}$/.test(trackingNumber)) {
-				carrierSelect.val('usps'); // Default to USPS for numeric patterns
+			// USPS pattern: 20-22 digit numbers
+			if (/^[0-9]{20,22}$/.test(trackingNumber)) {
+				carrierSelect.val('usps');
 				return;
 			}
 		},

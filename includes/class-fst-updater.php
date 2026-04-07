@@ -193,7 +193,9 @@ class FST_Updater {
         $proper_dest = WP_PLUGIN_DIR . '/' . dirname( $this->slug );
 
         // Move from the extracted folder to the correct plugin directory.
-        $wp_filesystem->move( $result['destination'], $proper_dest );
+        if ( ! $wp_filesystem->move( $result['destination'], $proper_dest ) ) {
+            return new WP_Error( 'fst_move_failed', 'Could not move plugin to the correct directory.' );
+        }
         $result['destination'] = $proper_dest;
 
         // Re-activate the plugin.

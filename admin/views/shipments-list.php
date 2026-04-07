@@ -251,7 +251,7 @@ function fst_is_shipment_late( $shipment ) {
                             <?php echo $shipment->est_delivery ? esc_html( date_i18n( get_option( 'date_format' ), strtotime( $shipment->est_delivery ) ) ) : '&mdash;'; ?>
                         </td>
                         <td>
-                            <?php echo $shipment->last_checked ? esc_html( human_time_diff( strtotime( $shipment->last_checked ), current_time( 'timestamp' ) ) ) . ' ago' : __( 'Never', 'fishotel-shiptracker' ); ?>
+                            <?php echo ! empty( $shipment->last_checked ) ? esc_html( human_time_diff( strtotime( $shipment->last_checked ), current_time( 'timestamp' ) ) ) . ' ago' : esc_html__( 'Never', 'fishotel-shiptracker' ); ?>
                         </td>
                         <td>
                             <button class="button button-small fst-recheck-btn" data-id="<?php echo esc_attr( $shipment->id ); ?>">

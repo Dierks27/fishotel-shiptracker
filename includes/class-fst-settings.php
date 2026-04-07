@@ -509,7 +509,7 @@ class FST_Settings {
      * Save general settings.
      */
     private function save_general_settings() {
-        update_option( 'fst_default_carrier', sanitize_text_field( $_POST['fst_default_carrier'] ) );
+        update_option( 'fst_default_carrier', sanitize_text_field( $_POST['fst_default_carrier'] ?? 'ups' ) );
         update_option( 'fst_auto_detect_carrier', isset( $_POST['fst_auto_detect_carrier'] ) ? 1 : 0 );
         update_option( 'fst_auto_complete_orders', isset( $_POST['fst_auto_complete_orders'] ) ? 1 : 0 );
     }
@@ -518,10 +518,10 @@ class FST_Settings {
      * Save carrier settings.
      */
     private function save_carrier_settings() {
-        update_option( 'fst_ups_client_id', sanitize_text_field( $_POST['fst_ups_client_id'] ) );
-        update_option( 'fst_ups_client_secret', sanitize_text_field( $_POST['fst_ups_client_secret'] ) );
-        update_option( 'fst_usps_client_id', sanitize_text_field( $_POST['fst_usps_client_id'] ) );
-        update_option( 'fst_usps_client_secret', sanitize_text_field( $_POST['fst_usps_client_secret'] ) );
+        update_option( 'fst_ups_client_id', sanitize_text_field( $_POST['fst_ups_client_id'] ?? '' ) );
+        update_option( 'fst_ups_client_secret', sanitize_text_field( $_POST['fst_ups_client_secret'] ?? '' ) );
+        update_option( 'fst_usps_client_id', sanitize_text_field( $_POST['fst_usps_client_id'] ?? '' ) );
+        update_option( 'fst_usps_client_secret', sanitize_text_field( $_POST['fst_usps_client_secret'] ?? '' ) );
     }
 
     /**
@@ -544,18 +544,18 @@ class FST_Settings {
      * Save tracking page settings.
      */
     private function save_tracking_page_settings() {
-        update_option( 'fst_tracking_bg_color', sanitize_text_field( $_POST['fst_tracking_bg_color'] ) );
-        update_option( 'fst_tracking_accent_color', sanitize_text_field( $_POST['fst_tracking_accent_color'] ) );
-        update_option( 'fst_tracking_text_color', sanitize_text_field( $_POST['fst_tracking_text_color'] ) );
-        update_option( 'fst_tracking_custom_css', wp_kses_post( $_POST['fst_tracking_custom_css'] ) );
+        update_option( 'fst_tracking_bg_color', sanitize_hex_color( $_POST['fst_tracking_bg_color'] ?? '#ffffff' ) );
+        update_option( 'fst_tracking_accent_color', sanitize_hex_color( $_POST['fst_tracking_accent_color'] ?? '#007cba' ) );
+        update_option( 'fst_tracking_text_color', sanitize_hex_color( $_POST['fst_tracking_text_color'] ?? '#333333' ) );
+        update_option( 'fst_tracking_custom_css', wp_kses_post( $_POST['fst_tracking_custom_css'] ?? '' ) );
     }
 
     /**
      * Save advanced settings.
      */
     private function save_advanced_settings() {
-        update_option( 'fst_polling_interval', absint( $_POST['fst_polling_interval'] ) );
+        update_option( 'fst_polling_interval', absint( $_POST['fst_polling_interval'] ?? 3600 ) );
         update_option( 'fst_debug_logging', isset( $_POST['fst_debug_logging'] ) ? 'yes' : 'no' );
-        update_option( 'fst_data_retention_days', absint( $_POST['fst_data_retention_days'] ) );
+        update_option( 'fst_data_retention_days', absint( $_POST['fst_data_retention_days'] ?? 1095 ) );
     }
 }

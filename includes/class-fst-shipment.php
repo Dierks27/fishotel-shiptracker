@@ -166,7 +166,7 @@ class FST_Shipment {
             $data['raw_data'] = wp_json_encode( $data['raw_data'] );
         }
 
-        $result = $wpdb->insert( self::events_table(), $data );
+        $result = $wpdb->insert( self::events_table(), $data, array( '%d', '%s', '%s', '%s', '%s', '%s', '%s' ) );
         return false === $result ? false : $wpdb->insert_id;
     }
 

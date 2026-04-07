@@ -95,7 +95,7 @@ jQuery(function($) {
             $spinner.removeClass('is-active');
 
             if ( ! response.success ) {
-                $results.html('<div class="notice notice-error"><p>' + (response.data.message || 'Scan failed.') + '</p></div>').show();
+                $results.html('<div class="notice notice-error"><p>' + escHtml(response.data.message || 'Scan failed.') + '</p></div>').show();
                 return;
             }
 
@@ -185,7 +185,7 @@ jQuery(function($) {
             $spinner.removeClass('is-active');
 
             if ( ! response.success ) {
-                $results.html('<div class="notice notice-error"><p>' + (response.data.message || 'Import failed.') + '</p></div>').show();
+                $results.html('<div class="notice notice-error"><p>' + escHtml(response.data.message || 'Import failed.') + '</p></div>').show();
                 return;
             }
 
