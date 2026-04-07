@@ -422,10 +422,8 @@ class FST_Order {
          * @param array $meta_keys Meta keys to check (first match wins).
          */
         $meta_keys = apply_filters( 'fst_requested_ship_date_meta_keys', array(
-            'fishotel_shipping_date',
             '_fishotel_shipping_date',
-            'shipping_date',
-            '_shipping_date',
+            'fishotel_shipping_date',
         ) );
 
         $order = wc_get_order( $order_id );
