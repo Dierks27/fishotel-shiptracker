@@ -143,6 +143,9 @@ class FST_Updater {
                 'requires'     => '5.8',
                 'requires_php' => '7.4',
             );
+        } else {
+            // Remove any stale update notice from a previous check.
+            unset( $transient->response[ $this->slug ] );
         }
 
         return $transient;
