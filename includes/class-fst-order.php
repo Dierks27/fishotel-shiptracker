@@ -376,23 +376,77 @@ class FST_Order {
 
     /**
      * Output ship date for orders list column.
+     *
+     * Shows the shipment ship_date if tracking exists, otherwise falls back
+     * to the requested shipping date stored as order meta by checkout plugins.
      */
     private function output_ship_date_column( $order_id ) {
         $shipments = FST_Shipment::get_by_order( $order_id );
 
-        if ( empty( $shipments ) ) {
-            echo '<span style="color:#999;">&mdash;</span>';
+        // If shipments exist, show the shipment ship dates.
+        if ( ! empty( $shipments ) ) {
+            foreach ( $shipments as $shipment ) {
+                if ( ! empty( $shipment->ship_date ) ) {
+                    echo '<span style="display:block;font-size:12px;white-space:nowrap;">';
+                    echo esc_html( date_i18n( get_option( 'date_format' ), strtotime( $shipment->ship_date ) ) );
+                    echo '</span>';
+                } else {
+                    echo '<span style="color:#999;">&mdash;</span>';
+                }
+            }
             return;
         }
 
-        foreach ( $shipments as $shipment ) {
-            if ( ! empty( $shipment->ship_date ) ) {
-                echo '<span style="display:block;font-size:12px;white-space:nowrap;">';
-                echo esc_html( date_i18n( get_option( 'date_format' ), strtotime( $shipment->ship_date ) ) );
-                echo '</span>';
-            } else {
-                echo '<span style="color:#999;">&mdash;</span>';
+        // No shipments — check for a requested shipping date in order meta.
+        $requested_date = $this->get_requested_ship_date( $order_id );
+
+        if ( $requested_date ) {
+            echo '<span style="display:block;font-size:12px;white-space:nowrap;color:#b26b00;">';
+            echo esc_html( $requested_date );
+            echo '</span>';
+        } else {
+            echo '<span style="color:#999;">&mdash;</span>';
+        }
+    }
+
+    /**
+     * Get the requested shipping date from order meta (set by checkout plugin).
+     *
+     * @param int $order_id
+     * @return string|false Formatted date string or false.
+     */
+    private function get_requested_ship_date( $order_id ) {
+        /**
+         * Filter the meta keys checked for a requested shipping date.
+         *
+         * @param array $meta_keys Meta keys to check (first match wins).
+         */
+        $meta_keys = apply_filters( 'fst_requested_ship_date_meta_keys', array(
+            'fishotel_shipping_date',
+            '_fishotel_shipping_date',
+            'shipping_date',
+            '_shipping_date',
+        ) );
+
+        $order = wc_get_order( $order_id );
+        if ( ! $order ) {
+            return false;
+        }
+
+        foreach ( $meta_keys as $key ) {
+            $value = $order->get_meta( $key );
+            if ( ! empty( $value ) ) {
+                // Try to parse as a date. The value may already be formatted
+                // (e.g. "Monday, April 20, 2026") or a raw date string.
+                $timestamp = strtotime( $value );
+                if ( $timestamp ) {
+                    return date_i18n( get_option( 'date_format' ), $timestamp );
+                }
+                // Return as-is if it can't be parsed.
+                return $value;
             }
         }
+
+        return false;
     }
 }

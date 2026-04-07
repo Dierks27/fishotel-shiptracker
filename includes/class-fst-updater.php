@@ -119,7 +119,18 @@ class FST_Updater {
             return $transient;
         }
 
-        if ( version_compare( $remote['version'], $this->version, '>' ) ) {
+        // Read the on-disk version so that after an in-request update
+        // (where $this->version still holds the OLD value) we compare
+        // against the newly installed version and don't re-add the notice.
+        $current_version = $this->version;
+        if ( function_exists( 'get_plugin_data' ) && file_exists( $this->plugin_file ) ) {
+            $plugin_data = get_plugin_data( $this->plugin_file, false, false );
+            if ( ! empty( $plugin_data['Version'] ) ) {
+                $current_version = $plugin_data['Version'];
+            }
+        }
+
+        if ( version_compare( $remote['version'], $current_version, '>' ) ) {
             $transient->response[ $this->slug ] = (object) array(
                 'slug'         => dirname( $this->slug ),
                 'plugin'       => $this->slug,
