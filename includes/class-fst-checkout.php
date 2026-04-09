@@ -48,6 +48,10 @@ class FST_Checkout {
 	 * @param WC_Checkout $checkout
 	 */
 	public function render_sms_fields( $checkout ) {
+		if ( ! get_option( 'fst_sms_notifications', false ) ) {
+			return;
+		}
+
 		echo '<div id="fst-sms-fields">';
 		echo '<h3>' . esc_html__( 'Shipment Text Notifications', 'fishotel-shiptracker' ) . '</h3>';
 		echo '<p class="fst-sms-description">'
@@ -102,6 +106,10 @@ class FST_Checkout {
 	 * Validate SMS fields during checkout.
 	 */
 	public function validate_sms_fields() {
+		if ( ! get_option( 'fst_sms_notifications', false ) ) {
+			return;
+		}
+
 		// phpcs:disable WordPress.Security.NonceVerification.Missing -- WooCommerce handles nonce.
 		if ( empty( $_POST['_fst_sms_enabled'] ) ) {
 			return;
@@ -130,6 +138,10 @@ class FST_Checkout {
 	 * @param int $order_id
 	 */
 	public function save_sms_fields( $order_id ) {
+		if ( ! get_option( 'fst_sms_notifications', false ) ) {
+			return;
+		}
+
 		// phpcs:disable WordPress.Security.NonceVerification.Missing -- WooCommerce handles nonce.
 		$order = wc_get_order( $order_id );
 		if ( ! $order ) {

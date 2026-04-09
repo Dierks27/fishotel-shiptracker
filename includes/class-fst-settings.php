@@ -158,6 +158,7 @@ class FST_Settings {
         $default_carrier = get_option( 'fst_default_carrier', 'ups' );
         $auto_detect     = get_option( 'fst_auto_detect_carrier', true );
         $auto_complete   = get_option( 'fst_auto_complete_orders', true );
+        $sms_enabled     = get_option( 'fst_sms_notifications', false );
 
         ?>
         <table class="form-table">
@@ -188,6 +189,15 @@ class FST_Settings {
                 <td>
                     <input type="checkbox" id="fst_auto_complete_orders" name="fst_auto_complete_orders" value="1" <?php checked( $auto_complete ); ?>>
                     <p class="description"><?php esc_html_e( 'Automatically mark orders complete when shipment is delivered', 'fishotel-shiptracker' ); ?></p>
+                </td>
+            </tr>
+            <tr>
+                <th scope="row">
+                    <label for="fst_sms_notifications"><?php esc_html_e( 'SMS Notifications', 'fishotel-shiptracker' ); ?></label>
+                </th>
+                <td>
+                    <input type="checkbox" id="fst_sms_notifications" name="fst_sms_notifications" value="1" <?php checked( $sms_enabled ); ?>>
+                    <p class="description"><?php esc_html_e( 'Allow customers to opt-in to SMS text notifications at checkout (via email-to-SMS gateway)', 'fishotel-shiptracker' ); ?></p>
                 </td>
             </tr>
         </table>
@@ -512,6 +522,7 @@ class FST_Settings {
         update_option( 'fst_default_carrier', sanitize_text_field( $_POST['fst_default_carrier'] ?? 'ups' ) );
         update_option( 'fst_auto_detect_carrier', isset( $_POST['fst_auto_detect_carrier'] ) ? 1 : 0 );
         update_option( 'fst_auto_complete_orders', isset( $_POST['fst_auto_complete_orders'] ) ? 1 : 0 );
+        update_option( 'fst_sms_notifications', isset( $_POST['fst_sms_notifications'] ) ? 1 : 0 );
     }
 
     /**
