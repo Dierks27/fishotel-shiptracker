@@ -190,6 +190,9 @@ class FST_Tracker {
             }
         }
 
+        // Send SMS notification via email-to-SMS gateway.
+        $this->send_sms( $shipment, $order, $new_status );
+
         // Fire action hook for extensibility.
         do_action( 'fst_status_changed', $shipment, $old_status, $new_status, $order );
     }
@@ -232,6 +235,80 @@ class FST_Tracker {
 
         $sent = wp_mail( $to, $subject, $html_body, $headers );
         $this->log( sprintf( 'Email to %s for %s status: %s', $to, $status, $sent ? 'sent' : 'FAILED' ) );
+    }
+
+    /**
+     * Send an SMS notification via email-to-SMS carrier gateway.
+     *
+     * @param object   $shipment   Shipment row (stdClass).
+     * @param WC_Order $order
+     * @param string   $new_status
+     */
+    private function send_sms( $shipment, $order, $new_status ) {
+        if ( 'yes' !== $order->get_meta( '_fst_sms_enabled' ) ) {
+            return;
+        }
+
+        $sms_statuses = $order->get_meta( '_fst_sms_statuses' );
+        if ( ! is_array( $sms_statuses ) || ! in_array( $new_status, $sms_statuses, true ) ) {
+            return;
+        }
+
+        $phone = preg_replace( '/[^0-9]/', '', $order->get_billing_phone() );
+
+        // Strip US country code prefix.
+        if ( strlen( $phone ) === 11 && '1' === $phone[0] ) {
+            $phone = substr( $phone, 1 );
+        }
+
+        if ( strlen( $phone ) !== 10 ) {
+            $this->log( sprintf( 'SMS skipped for order %d: invalid phone (%s)', $order->get_id(), $phone ) );
+            return;
+        }
+
+        $gateways = array(
+            'att'     => '@txt.att.net',
+            'verizon' => '@vtext.com',
+            'tmobile' => '@tmomail.net',
+            'sprint'  => '@messaging.sprintpcs.com',
+        );
+
+        $carrier_key = $order->get_meta( '_fst_sms_carrier' );
+        if ( ! isset( $gateways[ $carrier_key ] ) ) {
+            $this->log( sprintf( 'SMS skipped for order %d: unknown carrier (%s)', $order->get_id(), $carrier_key ) );
+            return;
+        }
+
+        $sms_to  = $phone . $gateways[ $carrier_key ];
+        $message = $this->build_sms_message( $shipment, $order, $new_status );
+        $headers = array( 'Content-Type: text/plain; charset=UTF-8' );
+
+        $sent = wp_mail( $sms_to, '', $message, $headers );
+        $this->log( sprintf( 'SMS to %s for order %d status %s: %s', $sms_to, $order->get_id(), $new_status, $sent ? 'sent' : 'FAILED' ) );
+    }
+
+    /**
+     * Build a short SMS message (max 160 characters).
+     *
+     * @param object   $shipment
+     * @param WC_Order $order
+     * @param string   $status
+     * @return string
+     */
+    private function build_sms_message( $shipment, $order, $status ) {
+        $message = sprintf(
+            '%s: Order #%s is %s. Track: %s',
+            get_bloginfo( 'name' ),
+            $order->get_order_number(),
+            FST_Carrier::get_status_label( $status ),
+            $shipment->tracking_number
+        );
+
+        if ( mb_strlen( $message ) > 160 ) {
+            $message = mb_substr( $message, 0, 157 ) . '...';
+        }
+
+        return $message;
     }
 
     /**

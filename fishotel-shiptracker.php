@@ -46,6 +46,9 @@ final class FisHotel_ShipTracker {
     /** @var FST_MyAccount|null */
     public $myaccount = null;
 
+    /** @var FST_Checkout|null */
+    public $checkout = null;
+
     /**
      * Get the single instance.
      */
@@ -104,6 +107,7 @@ final class FisHotel_ShipTracker {
         require_once FST_PLUGIN_DIR . 'includes/class-fst-migrator.php';
         require_once FST_PLUGIN_DIR . 'includes/class-fst-email.php';
         require_once FST_PLUGIN_DIR . 'includes/class-fst-myaccount.php';
+        require_once FST_PLUGIN_DIR . 'includes/class-fst-checkout.php';
         require_once FST_PLUGIN_DIR . 'includes/class-fst-updater.php';
 
         // Carriers.
@@ -121,6 +125,7 @@ final class FisHotel_ShipTracker {
         $this->tracker  = new FST_Tracker();
         $this->order     = new FST_Order();
         $this->myaccount = new FST_MyAccount();
+        $this->checkout  = new FST_Checkout();
 
         // REST API — FST_REST_API::register_routes() is called directly, no constructor hook.
         $rest_api = new FST_REST_API();
