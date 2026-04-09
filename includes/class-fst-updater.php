@@ -246,6 +246,11 @@ class FST_Updater {
             $info = $this->check_tags();
         }
 
+        // Fall back to reading version from main plugin file on GitHub.
+        if ( ! $info ) {
+            $info = $this->check_plugin_file();
+        }
+
         if ( ! $info ) {
             // Cache the failure for 30 min.
             set_transient( $this->cache_key, array(), 1800 );
@@ -357,6 +362,54 @@ class FST_Updater {
         return array(
             'version'   => $best_version,
             'package'   => $best_url,
+            'changelog' => '',
+        );
+    }
+
+    /**
+     * Check the main plugin file on GitHub for version (final fallback).
+     *
+     * Reads the raw plugin header from the default branch and extracts
+     * the Version field. No release or tag required — just push to main.
+     *
+     * @return array|false
+     */
+    private function check_plugin_file() {
+        $url = sprintf(
+            'https://raw.githubusercontent.com/%s/main/fishotel-shiptracker.php',
+            $this->repo
+        );
+
+        $response = wp_remote_get( $url, array(
+            'headers' => array(
+                'User-Agent' => 'FisHotel-ShipTracker/' . $this->version,
+            ),
+            'timeout' => 10,
+        ) );
+
+        if ( is_wp_error( $response ) || 200 !== wp_remote_retrieve_response_code( $response ) ) {
+            return false;
+        }
+
+        $body = wp_remote_retrieve_body( $response );
+
+        // Extract "Version: x.y.z" from the plugin header.
+        if ( ! preg_match( '/^[\s*]*Version:\s*(.+)$/mi', $body, $matches ) ) {
+            return false;
+        }
+
+        $version = trim( $matches[1] );
+
+        if ( ! preg_match( '/^\d+\.\d+/', $version ) ) {
+            return false;
+        }
+
+        // Use the zipball of the default branch as the download package.
+        $package = sprintf( 'https://api.github.com/repos/%s/zipball/main', $this->repo );
+
+        return array(
+            'version'   => $version,
+            'package'   => $package,
             'changelog' => '',
         );
     }
