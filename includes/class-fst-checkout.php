@@ -161,10 +161,10 @@ class FST_Checkout {
 
 		$js = "(function($){
 			function fstToggleSms(){
-				var checked=$('#fst_sms_enabled').is(':checked');
+				var checked=$('#_fst_sms_enabled').is(':checked');
 				$('#fst-sms-options')[checked?'slideDown':'slideUp'](200);
 			}
-			$(document).on('change','#fst_sms_enabled',fstToggleSms);
+			$(document).on('change','#_fst_sms_enabled',fstToggleSms);
 			$(document).ready(fstToggleSms);
 		})(jQuery);";
 
