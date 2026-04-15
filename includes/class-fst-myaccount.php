@@ -127,7 +127,7 @@ class FST_MyAccount {
 
         // Status progress steps.
         $progress_steps = array(
-            'shipped'          => 'Shipped',
+            'label_created'    => 'Label Created',
             'in_transit'       => 'In Transit',
             'out_for_delivery' => 'Out for Delivery',
             'delivered'        => 'Delivered',
@@ -273,9 +273,8 @@ class FST_MyAccount {
         // Map statuses to the nearest progress step.
         $status_to_step = array(
             'unknown'              => -1,
-            'label_created'        => 0,  // Shipped
-            'shipped'              => 0,  // Shipped
-            'pre_transit'          => 0,  // Shipped
+            'label_created'        => 0,  // Label Created
+            'pre_transit'          => 0,  // Label Created
             'in_transit'           => 1,  // In Transit
             'out_for_delivery'     => 2,  // Out for Delivery
             'available_for_pickup' => 2,  // Out for Delivery equivalent

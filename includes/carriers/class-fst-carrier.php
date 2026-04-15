@@ -27,7 +27,6 @@ abstract class FST_Carrier {
     const STATUSES = array(
         'unknown',
         'label_created',
-        'shipped',
         'pre_transit',
         'in_transit',
         'out_for_delivery',
@@ -142,7 +141,6 @@ abstract class FST_Carrier {
         $labels = array(
             'unknown'              => __( 'Unknown', 'fishotel-shiptracker' ),
             'label_created'        => __( 'Label Created', 'fishotel-shiptracker' ),
-            'shipped'              => __( 'Shipped', 'fishotel-shiptracker' ),
             'pre_transit'          => __( 'Pre-Transit', 'fishotel-shiptracker' ),
             'in_transit'           => __( 'In Transit', 'fishotel-shiptracker' ),
             'out_for_delivery'     => __( 'Out for Delivery', 'fishotel-shiptracker' ),
@@ -166,7 +164,6 @@ abstract class FST_Carrier {
         $colors = array(
             'unknown'              => '#999999',
             'label_created'        => '#607d8b',
-            'shipped'              => '#1976d2',
             'pre_transit'          => '#ff9800',
             'in_transit'           => '#2196f3',
             'out_for_delivery'     => '#4caf50',

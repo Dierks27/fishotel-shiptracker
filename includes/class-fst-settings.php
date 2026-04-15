@@ -274,7 +274,6 @@ class FST_Settings {
     private function render_status_actions_tab() {
         $statuses = array(
             'label_created'        => 'Label Created',
-            'shipped'              => 'Shipped',
             'pre_transit'          => 'Pre-Transit',
             'in_transit'           => 'In Transit',
             'out_for_delivery'     => 'Out for Delivery',
@@ -339,7 +338,6 @@ class FST_Settings {
     private function render_email_tab() {
         $statuses = array(
             'label_created'        => 'Label Created',
-            'shipped'              => 'Shipped',
             'pre_transit'          => 'Pre-Transit',
             'in_transit'           => 'In Transit',
             'out_for_delivery'     => 'Out for Delivery',

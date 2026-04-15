@@ -117,17 +117,15 @@ function fst_is_shipment_late( $shipment ) {
     <!-- Active Shipments Overview -->
     <?php
     $active_statuses = array(
-        'shipped'          => array( 'label' => 'Shipped',          'icon' => '&#128230;' ),
         'in_transit'       => array( 'label' => 'In Transit',       'icon' => '&#128666;' ),
         'out_for_delivery' => array( 'label' => 'Out for Delivery', 'icon' => '&#128230;' ),
         'exception'        => array( 'label' => 'Exception',        'icon' => '&#9888;' ),
         'return_to_sender' => array( 'label' => 'Returned',         'icon' => '&#8617;' ),
     );
-    $shipped_count    = isset( $status_counts['shipped'] ) ? $status_counts['shipped'] : 0;
     $in_transit_count = isset( $status_counts['in_transit'] ) ? $status_counts['in_transit'] : 0;
     $ofd_count        = isset( $status_counts['out_for_delivery'] ) ? $status_counts['out_for_delivery'] : 0;
     $exception_count  = isset( $status_counts['exception'] ) ? $status_counts['exception'] : 0;
-    $active_total     = $shipped_count + $in_transit_count + $ofd_count + $exception_count;
+    $active_total     = $in_transit_count + $ofd_count + $exception_count;
     $delivered_count  = isset( $status_counts['delivered'] ) ? $status_counts['delivered'] : 0;
     $base_url         = admin_url( 'admin.php?page=fst-dashboard' );
     ?>
@@ -173,7 +171,6 @@ function fst_is_shipment_late( $shipment ) {
                     <option value=""><?php esc_html_e( 'All Statuses', 'fishotel-shiptracker' ); ?></option>
                     <option value="unknown" <?php selected( $status_filter, 'unknown' ); ?>>Unknown</option>
                     <option value="label_created" <?php selected( $status_filter, 'label_created' ); ?>>Label Created</option>
-                    <option value="shipped" <?php selected( $status_filter, 'shipped' ); ?>>Shipped</option>
                     <option value="pre_transit" <?php selected( $status_filter, 'pre_transit' ); ?>>Pre-Transit</option>
                     <option value="in_transit" <?php selected( $status_filter, 'in_transit' ); ?>>In Transit</option>
                     <option value="out_for_delivery" <?php selected( $status_filter, 'out_for_delivery' ); ?>>Out for Delivery</option>

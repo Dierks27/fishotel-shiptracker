@@ -343,7 +343,6 @@
 			var statusMap = {
 				unknown: 'Unknown',
 				label_created: 'Label Created',
-				shipped: 'Shipped',
 				pre_transit: 'Pre-Transit',
 				in_transit: 'In Transit',
 				out_for_delivery: 'Out for Delivery',
