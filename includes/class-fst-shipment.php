@@ -196,7 +196,8 @@ class FST_Shipment {
         $terminal = array( 'delivered', 'failure', 'return_to_sender' );
         $placeholders = implode( ',', array_fill( 0, count( $terminal ), '%s' ) );
 
-        $polling_interval    = (int) get_option( 'fst_polling_interval', 60 );
+        $polling_seconds     = (int) get_option( 'fst_polling_interval', 3600 );
+        $polling_interval    = max( 5, intval( $polling_seconds / 60 ) ); // Convert seconds to minutes for SQL INTERVAL.
         $ofd_interval        = (int) get_option( 'fst_ofd_polling_interval', 30 );
         $stale_days          = 30;
 

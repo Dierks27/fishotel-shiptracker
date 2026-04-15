@@ -26,6 +26,15 @@
 			// AJAX recheck tracking
 			$(document).on('click', '.fst-recheck-btn', $.proxy(this.recheckTracking, this));
 
+			// Intercept Enter key inside the tracking form so it triggers
+			// the AJAX add instead of submitting the WooCommerce order form.
+			$(document).on('keypress', '#fst-tracking-number, #fst-carrier', function (e) {
+				if (e.which === 13) {
+					e.preventDefault();
+					$('#fst-add-tracking-btn').trigger('click');
+				}
+			});
+
 			// Auto-detect carrier on tracking number input
 			$(document).on('change', '#fst-tracking-number', $.proxy(this.detectCarrier, this));
 
