@@ -213,13 +213,20 @@ class FST_Order {
             $tracker->poll_shipment( FST_Shipment::get( $shipment_id ) );
         }
 
-        // Add order note.
+        // Add order note and move out of Processing.
         $order = wc_get_order( $order_id );
         if ( $order ) {
             $order->add_order_note(
                 sprintf( 'Shipment tracking added: %s via %s', $tracking_number, strtoupper( $carrier ) ),
                 false // Not customer-facing note.
             );
+
+            // Automatically complete the order when tracking is added so it
+            // is no longer mixed in with orders that haven't shipped yet.
+            if ( 'processing' === $order->get_status() ) {
+                $order->set_status( 'completed', 'ShipTracker: tracking number added.' );
+                $order->save();
+            }
         }
 
         wp_send_json_success( array(
@@ -313,6 +320,13 @@ class FST_Order {
             'tracking_number' => $tracking_number,
             'carrier'         => $carrier,
         ) );
+
+        // Move order out of Processing when tracking is added.
+        $order = wc_get_order( $order_id );
+        if ( $order && 'processing' === $order->get_status() ) {
+            $order->set_status( 'completed', 'ShipTracker: tracking number added.' );
+            $order->save();
+        }
     }
 
     /**
