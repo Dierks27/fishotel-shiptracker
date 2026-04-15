@@ -140,6 +140,13 @@ final class FisHotel_ShipTracker {
         // Admin dashboard widget.
         add_action( 'wp_dashboard_setup', array( $this, 'add_dashboard_widget' ) );
 
+        // Register custom "Shipped" order status.
+        add_action( 'init', array( $this, 'register_shipped_order_status' ) );
+        add_filter( 'wc_order_statuses', array( $this, 'add_shipped_to_order_statuses' ) );
+        add_filter( 'woocommerce_reports_order_statuses', array( $this, 'add_shipped_to_reports' ) );
+        // Allow "Shipped" orders to transition like standard paid statuses.
+        add_filter( 'woocommerce_order_is_paid_statuses', array( $this, 'add_shipped_to_paid_statuses' ) );
+
         // Declare HPOS compatibility.
         add_action( 'before_woocommerce_init', function() {
             if ( class_exists( '\Automattic\WooCommerce\Utilities\FeaturesUtil' ) ) {
@@ -258,6 +265,51 @@ final class FisHotel_ShipTracker {
         $settings_link = '<a href="' . admin_url( 'admin.php?page=fst-settings' ) . '">' . __( 'Settings', 'fishotel-shiptracker' ) . '</a>';
         array_unshift( $links, $settings_link );
         return $links;
+    }
+
+    /**
+     * Register the custom "Shipped" WooCommerce order status.
+     */
+    public function register_shipped_order_status() {
+        register_post_status( 'wc-shipped', array(
+            'label'                     => _x( 'Shipped', 'Order status', 'fishotel-shiptracker' ),
+            'public'                    => true,
+            'exclude_from_search'       => false,
+            'show_in_admin_all_list'    => true,
+            'show_in_admin_status_list' => true,
+            'label_count'               => _n_noop( 'Shipped <span class="count">(%s)</span>', 'Shipped <span class="count">(%s)</span>', 'fishotel-shiptracker' ),
+        ) );
+    }
+
+    /**
+     * Add "Shipped" to the WooCommerce order statuses dropdown.
+     */
+    public function add_shipped_to_order_statuses( $order_statuses ) {
+        $new_statuses = array();
+        foreach ( $order_statuses as $key => $label ) {
+            $new_statuses[ $key ] = $label;
+            // Insert "Shipped" right after "Processing".
+            if ( 'wc-processing' === $key ) {
+                $new_statuses['wc-shipped'] = _x( 'Shipped', 'Order status', 'fishotel-shiptracker' );
+            }
+        }
+        return $new_statuses;
+    }
+
+    /**
+     * Include "Shipped" in WooCommerce reports as a valid order status.
+     */
+    public function add_shipped_to_reports( $statuses ) {
+        $statuses[] = 'shipped';
+        return $statuses;
+    }
+
+    /**
+     * Treat "Shipped" as a paid status so payment info is retained.
+     */
+    public function add_shipped_to_paid_statuses( $statuses ) {
+        $statuses[] = 'shipped';
+        return $statuses;
     }
 
     /**

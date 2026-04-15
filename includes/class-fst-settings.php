@@ -321,6 +321,7 @@ class FST_Settings {
                     <td>
                         <select name="fst_status_actions[<?php echo esc_attr( $status_key ); ?>][order_status]">
                             <option value="none" <?php selected( $order_status, 'none' ); ?>><?php esc_html_e( 'No Change', 'fishotel-shiptracker' ); ?></option>
+                            <option value="shipped" <?php selected( $order_status, 'shipped' ); ?>>Shipped</option>
                             <option value="completed" <?php selected( $order_status, 'completed' ); ?>>Completed</option>
                             <option value="processing" <?php selected( $order_status, 'processing' ); ?>>Processing</option>
                             <option value="on-hold" <?php selected( $order_status, 'on-hold' ); ?>>On Hold</option>

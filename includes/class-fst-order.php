@@ -221,10 +221,10 @@ class FST_Order {
                 false // Not customer-facing note.
             );
 
-            // Automatically complete the order when tracking is added so it
-            // is no longer mixed in with orders that haven't shipped yet.
+            // Move order to "Shipped" so it's no longer mixed in with
+            // orders that haven't shipped yet.
             if ( 'processing' === $order->get_status() ) {
-                $order->set_status( 'completed', 'ShipTracker: tracking number added.' );
+                $order->set_status( 'shipped', 'ShipTracker: tracking number added.' );
                 $order->save();
             }
         }
@@ -321,10 +321,10 @@ class FST_Order {
             'carrier'         => $carrier,
         ) );
 
-        // Move order out of Processing when tracking is added.
+        // Move order to "Shipped" when tracking is added.
         $order = wc_get_order( $order_id );
         if ( $order && 'processing' === $order->get_status() ) {
-            $order->set_status( 'completed', 'ShipTracker: tracking number added.' );
+            $order->set_status( 'shipped', 'ShipTracker: tracking number added.' );
             $order->save();
         }
     }
