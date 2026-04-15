@@ -3,7 +3,7 @@
  * Plugin Name: FisHotel ShipTracker
  * Plugin URI: https://fishotel.com
  * Description: Self-hosted shipment tracking for WooCommerce. Tracks UPS & USPS packages, sends automated email notifications, and provides a branded tracking page for customers.
- * Version: 1.6.2
+ * Version: 1.6.3
  * Author: FisHotel
  * Author URI: https://fishotel.com
  * Text Domain: fishotel-shiptracker
@@ -19,7 +19,7 @@
 defined( 'ABSPATH' ) || exit;
 
 // Plugin constants
-define( 'FST_VERSION', '1.6.2' );
+define( 'FST_VERSION', '1.6.3' );
 define( 'FST_DB_VERSION', '1.0.0' );
 define( 'FST_PLUGIN_FILE', __FILE__ );
 define( 'FST_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
@@ -296,6 +296,7 @@ final class FisHotel_ShipTracker {
         $late   = FST_Shipment::get_late_shipments();
 
         $statuses = array(
+            'shipped'          => array( 'label' => 'Shipped',          'color' => '#1976d2' ),
             'in_transit'       => array( 'label' => 'In Transit',       'color' => '#0073aa' ),
             'out_for_delivery' => array( 'label' => 'Out for Delivery', 'color' => '#17a2b8' ),
             'exception'        => array( 'label' => 'Exception',        'color' => '#dc3545' ),
@@ -305,7 +306,7 @@ final class FisHotel_ShipTracker {
         );
 
         $active_count = 0;
-        foreach ( array( 'in_transit', 'out_for_delivery', 'pre_transit' ) as $s ) {
+        foreach ( array( 'shipped', 'in_transit', 'out_for_delivery', 'pre_transit' ) as $s ) {
             $active_count += isset( $counts[ $s ] ) ? $counts[ $s ] : 0;
         }
         $exception_count = isset( $counts['exception'] ) ? $counts['exception'] : 0;

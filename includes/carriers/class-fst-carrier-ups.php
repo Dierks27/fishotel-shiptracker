@@ -158,7 +158,7 @@ class FST_Carrier_UPS extends FST_Carrier {
             }
             // If UPS accepted the tracking number but has no package data,
             // it likely means the label was created but not yet scanned.
-            $result['status'] = 'label_created';
+            $result['status'] = 'shipped';
             return $result;
         }
 
@@ -224,8 +224,8 @@ class FST_Carrier_UPS extends FST_Carrier {
             'D'  => 'delivered',
             'I'  => 'in_transit',
             'P'  => 'pre_transit',
-            'M'  => 'label_created',
-            'MV' => 'label_created',
+            'M'  => 'shipped',
+            'MV' => 'shipped',
             'X'  => 'exception',
             'RS' => 'return_to_sender',
             'DO' => 'out_for_delivery',
@@ -240,14 +240,14 @@ class FST_Carrier_UPS extends FST_Carrier {
         // Secondary map: 'code' field — more specific status codes.
         $code_map = array(
             'SR' => 'in_transit',       // Shipment received by carrier.
-            'OR' => 'label_created',    // Order processed / ready for UPS.
+            'OR' => 'shipped',          // Order processed / ready for UPS.
             'DP' => 'in_transit',       // Departure scan.
             'AR' => 'in_transit',       // Arrival scan.
-            'KB' => 'label_created',    // Billing info received.
+            'KB' => 'shipped',          // Billing info received.
             'OT' => 'out_for_delivery', // Out for delivery.
             'DL' => 'delivered',        // Delivered.
             'DS' => 'delivered',        // Delivered (signed).
-            'MP' => 'label_created',    // Manifest pickup.
+            'MP' => 'shipped',          // Manifest pickup.
         );
 
         if ( ! empty( $code ) && isset( $code_map[ $code ] ) ) {
@@ -263,8 +263,8 @@ class FST_Carrier_UPS extends FST_Carrier {
         if ( false !== strpos( $desc_lower, 'pickup' ) ) return 'available_for_pickup';
         if ( false !== strpos( $desc_lower, 'exception' ) ) return 'exception';
         if ( false !== strpos( $desc_lower, 'return' ) ) return 'return_to_sender';
-        if ( false !== strpos( $desc_lower, 'label' ) ) return 'label_created';
-        if ( false !== strpos( $desc_lower, 'billing' ) ) return 'label_created';
+        if ( false !== strpos( $desc_lower, 'label' ) ) return 'shipped';
+        if ( false !== strpos( $desc_lower, 'billing' ) ) return 'shipped';
         if ( false !== strpos( $desc_lower, 'origin scan' ) ) return 'in_transit';
         if ( false !== strpos( $desc_lower, 'departed' ) ) return 'in_transit';
         if ( false !== strpos( $desc_lower, 'arrived' ) ) return 'in_transit';

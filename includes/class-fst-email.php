@@ -95,7 +95,7 @@ class FST_Email {
      */
     public static function render_progress_bar( $status ) {
         $steps = array(
-            'label_created'    => 'Label Created',
+            'shipped'          => 'Shipped',
             'in_transit'       => 'In Transit',
             'out_for_delivery' => 'Out for Delivery',
             'delivered'        => 'Delivered',
@@ -104,6 +104,7 @@ class FST_Email {
         $status_map = array(
             'unknown'              => -1,
             'label_created'        => 0,
+            'shipped'              => 0,
             'pre_transit'          => 0,
             'in_transit'           => 1,
             'out_for_delivery'     => 2,
@@ -246,6 +247,10 @@ class FST_Email {
             'label_created' => array(
                 'subject' => 'Shipping label created for Order #{order_number}',
                 'body'    => "Hi {customer_name},\n\nGreat news! A shipping label has been created for your order.\n\n{tracking_progress}\n\nCarrier: {carrier}\nTracking #: {tracking_number}\n\n{track_button}\n\nWe'll send you another update once your package is on the move!",
+            ),
+            'shipped' => array(
+                'subject' => 'Your order #{order_number} has been shipped!',
+                'body'    => "Hi {customer_name},\n\nYour order has been shipped!\n\n{tracking_progress}\n\nCarrier: {carrier}\nTracking #: {tracking_number}\n\n{track_button}\n\nWe'll keep you updated as your package makes its way to you!",
             ),
             'pre_transit' => array(
                 'subject' => 'Your order #{order_number} is ready to ship',

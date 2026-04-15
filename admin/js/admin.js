@@ -18,16 +18,16 @@
 		 */
 		bindEvents: function () {
 			// AJAX add tracking
-			$(document).on('click', '.fst-add-tracking-btn', $.proxy(this.addTracking, this));
+			$(document).on('click', '#fst-add-tracking-btn', $.proxy(this.addTracking, this));
 
 			// AJAX remove tracking
-			$(document).on('click', '.fst-remove-tracking-btn', $.proxy(this.removeTracking, this));
+			$(document).on('click', '.fst-remove-btn', $.proxy(this.removeTracking, this));
 
 			// AJAX recheck tracking
 			$(document).on('click', '.fst-recheck-btn', $.proxy(this.recheckTracking, this));
 
 			// Auto-detect carrier on tracking number input
-			$(document).on('change', '.fst-tracking-number-input', $.proxy(this.detectCarrier, this));
+			$(document).on('change', '#fst-tracking-number', $.proxy(this.detectCarrier, this));
 
 			// Tab switching on settings page
 			$(document).on('click', '.fst-tabs .nav-tab', $.proxy(this.switchTab, this));
@@ -47,11 +47,12 @@
 			e.preventDefault();
 
 			var button = $(e.currentTarget);
-			var container = button.closest('.fst-shipment-form');
+			var container = button.closest('.fst-add-tracking-form');
+			var metabox = $('#fst-tracking-metabox');
 
-			var orderId = container.find('.fst-order-id').val();
-			var trackingNumber = container.find('.fst-tracking-number-input').val();
-			var carrier = container.find('.fst-carrier-select').val();
+			var orderId = metabox.data('order-id');
+			var trackingNumber = container.find('#fst-tracking-number').val();
+			var carrier = container.find('#fst-carrier').val();
 
 			if (!orderId || !trackingNumber || !carrier) {
 				alert('Please fill in all fields');
@@ -83,7 +84,7 @@
 						this.refreshShipments(orderId);
 
 						// Clear form
-						container.find('input, select').val('');
+						container.find('#fst-tracking-number').val('');
 					} else {
 						alert('Error: ' + (response.data && response.data.message ? response.data.message : response.data));
 					}
@@ -92,7 +93,7 @@
 					alert('AJAX error occurred');
 				},
 				complete: function () {
-					button.prop('disabled', false).text('Add Tracking');
+					button.prop('disabled', false).text('Add Tracking Info');
 				},
 			});
 		},
@@ -191,7 +192,7 @@
 		 */
 		detectCarrier: function (e) {
 			var trackingNumber = $(e.currentTarget).val().trim();
-			var carrierSelect = $(e.currentTarget).closest('form').find('.fst-carrier-select');
+			var carrierSelect = $(e.currentTarget).closest('.fst-add-tracking-form').find('#fst-carrier');
 
 			if (!trackingNumber) {
 				return;
@@ -340,13 +341,17 @@
 		 */
 		formatStatus: function (status) {
 			var statusMap = {
-				pending: 'Pending',
+				unknown: 'Unknown',
+				label_created: 'Label Created',
 				shipped: 'Shipped',
+				pre_transit: 'Pre-Transit',
 				in_transit: 'In Transit',
 				out_for_delivery: 'Out for Delivery',
 				delivered: 'Delivered',
 				exception: 'Exception',
-				returned: 'Returned',
+				available_for_pickup: 'Available for Pickup',
+				return_to_sender: 'Return to Sender',
+				failure: 'Delivery Failed',
 			};
 
 			return statusMap[status] || status;
