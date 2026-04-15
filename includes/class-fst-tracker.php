@@ -11,6 +11,30 @@ class FST_Tracker {
 
     public function __construct() {
         add_action( 'fst_poll_shipments', array( $this, 'poll_all_shipments' ) );
+
+        // Ensure the polling cron is scheduled — recovers if the activation
+        // hook failed (e.g. Action Scheduler wasn't loaded yet) or if the
+        // scheduled action was lost.
+        add_action( 'init', array( $this, 'ensure_cron_scheduled' ) );
+    }
+
+    /**
+     * Make sure the recurring poll action exists.
+     * Tries Action Scheduler first (ships with WooCommerce), falls back to WP-Cron.
+     */
+    public function ensure_cron_scheduled() {
+        // Action Scheduler (preferred — bundled with WooCommerce).
+        if ( function_exists( 'as_has_scheduled_action' ) ) {
+            if ( ! as_has_scheduled_action( 'fst_poll_shipments' ) ) {
+                as_schedule_recurring_action( time(), 30 * MINUTE_IN_SECONDS, 'fst_poll_shipments', array(), 'fishotel-shiptracker' );
+            }
+            return;
+        }
+
+        // Fallback to WP-Cron.
+        if ( ! wp_next_scheduled( 'fst_poll_shipments' ) ) {
+            wp_schedule_event( time(), 'hourly', 'fst_poll_shipments' );
+        }
     }
 
     /**
@@ -179,7 +203,7 @@ class FST_Tracker {
         }
 
         // Change WooCommerce order status.
-        if ( ! empty( $actions['order_status'] ) ) {
+        if ( ! empty( $actions['order_status'] ) && 'none' !== $actions['order_status'] ) {
             $target_status = $actions['order_status'];
             $current       = $order->get_status();
 

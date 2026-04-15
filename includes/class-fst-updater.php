@@ -238,17 +238,23 @@ class FST_Updater {
             return ! empty( $cached ) ? $cached : false;
         }
 
-        // Try releases first.
-        $info = $this->check_releases();
+        // Check all sources and use whichever has the highest version.
+        // This ensures pushing to main is enough — no release required.
+        $info = null;
 
-        // Fall back to tags.
-        if ( ! $info ) {
-            $info = $this->check_tags();
+        $release_info = $this->check_releases();
+        if ( $release_info ) {
+            $info = $release_info;
         }
 
-        // Fall back to reading version from main plugin file on GitHub.
-        if ( ! $info ) {
-            $info = $this->check_plugin_file();
+        $tag_info = $this->check_tags();
+        if ( $tag_info && ( ! $info || version_compare( $tag_info['version'], $info['version'], '>' ) ) ) {
+            $info = $tag_info;
+        }
+
+        $file_info = $this->check_plugin_file();
+        if ( $file_info && ( ! $info || version_compare( $file_info['version'], $info['version'], '>' ) ) ) {
+            $info = $file_info;
         }
 
         if ( ! $info ) {

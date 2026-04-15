@@ -164,7 +164,11 @@ class FST_Carrier_UPS extends FST_Carrier {
 
         // Current status — UPS uses 'type' for the status letter code (D, I, P, M, X etc.)
         // and 'code' for a more specific code (e.g., "SR", "KB"). We map on 'type' first.
+        // Some UPS responses nest status under currentStatus.status instead of directly.
         $current_status = $package['currentStatus'] ?? array();
+        if ( isset( $current_status['status'] ) && is_array( $current_status['status'] ) ) {
+            $current_status = $current_status['status'];
+        }
         $status_type    = $current_status['type'] ?? '';
         $status_code    = $current_status['code'] ?? '';
         $status_desc    = $current_status['description'] ?? '';
@@ -188,9 +192,10 @@ class FST_Carrier_UPS extends FST_Carrier {
         // Parse activity/events.
         $activities = $package['activity'] ?? array();
         foreach ( $activities as $activity ) {
+            $act_status = $activity['status'] ?? array();
             $event = array(
-                'status'      => $this->map_status( $activity['status']['type'] ?? '', $activity['status']['code'] ?? '', $activity['status']['description'] ?? '' ),
-                'description' => $activity['status']['description'] ?? '',
+                'status'      => $this->map_status( $act_status['type'] ?? '', $act_status['code'] ?? '', $act_status['description'] ?? '' ),
+                'description' => $act_status['description'] ?? '',
                 'location'    => $this->format_location( $activity['location'] ?? array() ),
                 'event_time'  => $this->parse_datetime( $activity['date'] ?? '', $activity['time'] ?? '' ),
                 'raw'         => $activity,
@@ -202,6 +207,18 @@ class FST_Carrier_UPS extends FST_Carrier {
             }
 
             $result['events'][] = $event;
+        }
+
+        // Fallback: if currentStatus didn't yield a valid status, try the most
+        // recent activity entry which often has proper type/code fields.
+        if ( 'unknown' === $result['status'] && ! empty( $result['events'] ) ) {
+            $latest_event = $result['events'][0];
+            if ( 'unknown' !== $latest_event['status'] ) {
+                $result['status'] = $latest_event['status'];
+                if ( empty( $result['status_detail'] ) ) {
+                    $result['status_detail'] = $latest_event['description'];
+                }
+            }
         }
 
         return $result;
@@ -240,14 +257,14 @@ class FST_Carrier_UPS extends FST_Carrier {
         // Secondary map: 'code' field — more specific status codes.
         $code_map = array(
             'SR' => 'in_transit',       // Shipment received by carrier.
-            'OR' => 'label_created',    // Order processed / ready for UPS.
+            'OR' => 'label_created',          // Order processed / ready for UPS.
             'DP' => 'in_transit',       // Departure scan.
             'AR' => 'in_transit',       // Arrival scan.
-            'KB' => 'label_created',    // Billing info received.
+            'KB' => 'label_created',          // Billing info received.
             'OT' => 'out_for_delivery', // Out for delivery.
             'DL' => 'delivered',        // Delivered.
             'DS' => 'delivered',        // Delivered (signed).
-            'MP' => 'label_created',    // Manifest pickup.
+            'MP' => 'label_created',          // Manifest pickup.
         );
 
         if ( ! empty( $code ) && isset( $code_map[ $code ] ) ) {
@@ -259,15 +276,26 @@ class FST_Carrier_UPS extends FST_Carrier {
         if ( false !== strpos( $desc_lower, 'delivered' ) ) return 'delivered';
         if ( false !== strpos( $desc_lower, 'out for delivery' ) ) return 'out_for_delivery';
         if ( false !== strpos( $desc_lower, 'in transit' ) ) return 'in_transit';
+        if ( false !== strpos( $desc_lower, 'on the way' ) ) return 'in_transit';
+        if ( false !== strpos( $desc_lower, 'on its way' ) ) return 'in_transit';
+        if ( false !== strpos( $desc_lower, 'in progress' ) ) return 'in_transit';
         if ( false !== strpos( $desc_lower, 'picked up' ) ) return 'pre_transit';
         if ( false !== strpos( $desc_lower, 'pickup' ) ) return 'available_for_pickup';
         if ( false !== strpos( $desc_lower, 'exception' ) ) return 'exception';
         if ( false !== strpos( $desc_lower, 'return' ) ) return 'return_to_sender';
         if ( false !== strpos( $desc_lower, 'label' ) ) return 'label_created';
         if ( false !== strpos( $desc_lower, 'billing' ) ) return 'label_created';
+        if ( false !== strpos( $desc_lower, 'order processed' ) ) return 'label_created';
+        if ( false !== strpos( $desc_lower, 'shipment ready' ) ) return 'label_created';
         if ( false !== strpos( $desc_lower, 'origin scan' ) ) return 'in_transit';
         if ( false !== strpos( $desc_lower, 'departed' ) ) return 'in_transit';
         if ( false !== strpos( $desc_lower, 'arrived' ) ) return 'in_transit';
+        if ( false !== strpos( $desc_lower, 'processing' ) ) return 'in_transit';
+        if ( false !== strpos( $desc_lower, 'cleared customs' ) ) return 'in_transit';
+        if ( false !== strpos( $desc_lower, 'delay' ) ) return 'exception';
+        if ( false !== strpos( $desc_lower, 'held' ) ) return 'exception';
+        if ( false !== strpos( $desc_lower, 'undeliverable' ) ) return 'failure';
+        if ( false !== strpos( $desc_lower, 'refused' ) ) return 'failure';
 
         return 'unknown';
     }
