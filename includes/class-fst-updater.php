@@ -1,14 +1,13 @@
 <?php
 /**
- * GitHub-based plugin auto-updater.
+ * GitHub-based plugin auto-updater (raw-branch pattern).
  *
- * Checks a GitHub repository for new versions (releases first, then tags)
- * and hooks into WordPress's native update system. Also adds a
- * "Check for Updates" link on the Plugins page.
+ * Reads the plugin header version directly from the main branch on GitHub.
+ * No releases or tags required — just bump the version and push to main.
  *
  * Workflow:
- *   1. Bump the version in fishotel-shiptracker.php
- *   2. Commit, tag (e.g. v1.2.0), push with --tags
+ *   1. Bump the version in fishotel-shiptracker.php (header + FST_VERSION)
+ *   2. Commit and push to main
  *   3. WordPress detects the new version and shows "Update Available"
  *
  * @package FisHotel_ShipTracker
@@ -29,6 +28,9 @@ class FST_Updater {
 
     /** @var string Absolute path to main plugin file */
     private $plugin_file;
+
+    /** @var string Branch to track */
+    private $branch = 'main';
 
     /** @var string Transient key for caching */
     private $cache_key = 'fst_github_update';
@@ -59,7 +61,6 @@ class FST_Updater {
 
     /**
      * Add "Check for Updates" link to the plugin row meta on the Plugins page.
-     * Shows next to "Version x.x.x | By FisHotel | Visit plugin site"
      */
     public function plugin_row_meta( $links, $file ) {
         if ( $file !== $this->slug ) {
@@ -78,7 +79,6 @@ class FST_Updater {
 
     /**
      * Handle the manual "Check for Updates" click.
-     * Clears the cache and forces WordPress to re-check.
      */
     public function handle_manual_check() {
         if ( ! isset( $_GET['fst_check_update'] ) ) {
@@ -93,14 +93,10 @@ class FST_Updater {
             return;
         }
 
-        // Clear our cache.
         delete_transient( $this->cache_key );
-
-        // Force WordPress to re-check plugin updates.
         delete_site_transient( 'update_plugins' );
         wp_update_plugins();
 
-        // Redirect back to plugins page with a notice.
         wp_safe_redirect( admin_url( 'plugins.php?fst_checked=1' ) );
         exit;
     }
@@ -120,8 +116,7 @@ class FST_Updater {
         }
 
         // Read the on-disk version so that after an in-request update
-        // (where $this->version still holds the OLD value) we compare
-        // against the newly installed version and don't re-add the notice.
+        // we compare against the newly installed version.
         $current_version = $this->version;
         if ( function_exists( 'get_plugin_data' ) && file_exists( $this->plugin_file ) ) {
             $plugin_data = get_plugin_data( $this->plugin_file, false, false );
@@ -144,7 +139,6 @@ class FST_Updater {
                 'requires_php' => '7.4',
             );
         } else {
-            // Remove any stale update notice from a previous check.
             unset( $transient->response[ $this->slug ] );
         }
 
@@ -183,9 +177,7 @@ class FST_Updater {
             'download_link' => $remote['package'],
             'sections'      => array(
                 'description' => $plugin_data['Description'],
-                'changelog'   => ! empty( $remote['changelog'] )
-                    ? nl2br( esc_html( $remote['changelog'] ) )
-                    : '<p>See <a href="https://github.com/' . esc_attr( $this->repo ) . '/releases">GitHub</a> for details.</p>',
+                'changelog'   => '<p>See <a href="https://github.com/' . esc_attr( $this->repo ) . '/commits/' . esc_attr( $this->branch ) . '">GitHub commits</a> for details.</p>',
             ),
         );
     }
@@ -193,7 +185,7 @@ class FST_Updater {
     /**
      * After install, rename the extracted folder to match the plugin directory.
      *
-     * GitHub zipballs extract to "owner-repo-commithash/" — WordPress won't
+     * GitHub archive ZIPs extract to "repo-branch/" — WordPress won't
      * find the plugin there. We move it to the correct folder name and
      * re-activate.
      */
@@ -206,17 +198,13 @@ class FST_Updater {
 
         $proper_dest = WP_PLUGIN_DIR . '/' . dirname( $this->slug );
 
-        // Move from the extracted folder to the correct plugin directory.
         if ( ! $wp_filesystem->move( $result['destination'], $proper_dest ) ) {
             return new WP_Error( 'fst_move_failed', 'Could not move plugin to the correct directory.' );
         }
         $result['destination'] = $proper_dest;
 
-        // Re-activate the plugin.
         activate_plugin( $this->slug );
 
-        // Clear both our cache and the WordPress update transient so the
-        // update button doesn't persist after a successful install.
         delete_transient( $this->cache_key );
         delete_site_transient( 'update_plugins' );
 
@@ -226,10 +214,10 @@ class FST_Updater {
     /**
      * Get remote version info from GitHub (cached).
      *
-     * Strategy: check releases first (gives us changelog + optional asset zip),
-     * then fall back to tags.
+     * Reads the raw plugin header from the main branch to get the version,
+     * and uses the branch archive ZIP as the download package.
      *
-     * @return array|false { 'version' => '1.2.0', 'package' => 'https://...', 'changelog' => '...' }
+     * @return array|false { 'version' => '1.6.5', 'package' => 'https://...' }
      */
     private function get_remote_info() {
         $cached = get_transient( $this->cache_key );
@@ -238,152 +226,10 @@ class FST_Updater {
             return ! empty( $cached ) ? $cached : false;
         }
 
-        // Check all sources and use whichever has the highest version.
-        // This ensures pushing to main is enough — no release required.
-        $info = null;
-
-        $release_info = $this->check_releases();
-        if ( $release_info ) {
-            $info = $release_info;
-        }
-
-        $tag_info = $this->check_tags();
-        if ( $tag_info && ( ! $info || version_compare( $tag_info['version'], $info['version'], '>' ) ) ) {
-            $info = $tag_info;
-        }
-
-        $file_info = $this->check_plugin_file();
-        if ( $file_info && ( ! $info || version_compare( $file_info['version'], $info['version'], '>' ) ) ) {
-            $info = $file_info;
-        }
-
-        if ( ! $info ) {
-            // Cache the failure for 30 min.
-            set_transient( $this->cache_key, array(), 1800 );
-            return false;
-        }
-
-        set_transient( $this->cache_key, $info, $this->cache_ttl );
-        return $info;
-    }
-
-    /**
-     * Check GitHub releases for the latest version.
-     *
-     * @return array|false
-     */
-    private function check_releases() {
-        $url = sprintf( 'https://api.github.com/repos/%s/releases/latest', $this->repo );
-
-        $response = wp_remote_get( $url, array(
-            'headers' => array(
-                'Accept'     => 'application/vnd.github.v3+json',
-                'User-Agent' => 'FisHotel-ShipTracker/' . $this->version,
-            ),
-            'timeout' => 10,
-        ) );
-
-        if ( is_wp_error( $response ) || 200 !== wp_remote_retrieve_response_code( $response ) ) {
-            return false;
-        }
-
-        $body = json_decode( wp_remote_retrieve_body( $response ), true );
-
-        if ( empty( $body['tag_name'] ) ) {
-            return false;
-        }
-
-        $version = ltrim( $body['tag_name'], 'vV' );
-
-        // Prefer an uploaded .zip asset (correct folder name inside).
-        $package = isset( $body['zipball_url'] ) ? $body['zipball_url'] : '';
-
-        if ( ! empty( $body['assets'] ) ) {
-            foreach ( $body['assets'] as $asset ) {
-                if ( '.zip' === substr( $asset['name'], -4 ) ) {
-                    $package = $asset['browser_download_url'];
-                    break;
-                }
-            }
-        }
-
-        return array(
-            'version'   => $version,
-            'package'   => $package,
-            'changelog' => isset( $body['body'] ) ? $body['body'] : '',
-        );
-    }
-
-    /**
-     * Check GitHub tags for the latest version (fallback).
-     *
-     * @return array|false
-     */
-    private function check_tags() {
-        $url = sprintf( 'https://api.github.com/repos/%s/tags?per_page=10', $this->repo );
-
-        $response = wp_remote_get( $url, array(
-            'headers' => array(
-                'Accept'     => 'application/vnd.github.v3+json',
-                'User-Agent' => 'FisHotel-ShipTracker/' . $this->version,
-            ),
-            'timeout' => 10,
-        ) );
-
-        if ( is_wp_error( $response ) || 200 !== wp_remote_retrieve_response_code( $response ) ) {
-            return false;
-        }
-
-        $tags = json_decode( wp_remote_retrieve_body( $response ), true );
-
-        if ( empty( $tags ) || ! is_array( $tags ) ) {
-            return false;
-        }
-
-        // Find the highest semver tag.
-        $best_version = '0.0.0';
-        $best_url     = '';
-
-        foreach ( $tags as $tag ) {
-            if ( empty( $tag['name'] ) ) {
-                continue;
-            }
-
-            $ver = ltrim( $tag['name'], 'vV' );
-
-            if ( ! preg_match( '/^\d+\.\d+/', $ver ) ) {
-                continue;
-            }
-
-            if ( version_compare( $ver, $best_version, '>' ) ) {
-                $best_version = $ver;
-                $best_url     = $tag['zipball_url'];
-            }
-        }
-
-        if ( '0.0.0' === $best_version ) {
-            return false;
-        }
-
-        return array(
-            'version'   => $best_version,
-            'package'   => $best_url,
-            'changelog' => '',
-        );
-    }
-
-    /**
-     * Check the main plugin file on GitHub for version (final fallback).
-     *
-     * Reads the raw plugin header from the default branch and extracts
-     * the Version field. No release or tag required — just push to main.
-     *
-     * @return array|false
-     */
-    private function check_plugin_file() {
         $url = sprintf(
-            'https://raw.githubusercontent.com/%s/main/fishotel-shiptracker.php',
-            $this->repo
+            'https://raw.githubusercontent.com/%s/%s/fishotel-shiptracker.php',
+            $this->repo,
+            $this->branch
         );
 
         $response = wp_remote_get( $url, array(
@@ -394,6 +240,7 @@ class FST_Updater {
         ) );
 
         if ( is_wp_error( $response ) || 200 !== wp_remote_retrieve_response_code( $response ) ) {
+            set_transient( $this->cache_key, array(), 1800 );
             return false;
         }
 
@@ -401,23 +248,30 @@ class FST_Updater {
 
         // Extract "Version: x.y.z" from the plugin header.
         if ( ! preg_match( '/^[\s*]*Version:\s*(.+)$/mi', $body, $matches ) ) {
+            set_transient( $this->cache_key, array(), 1800 );
             return false;
         }
 
         $version = trim( $matches[1] );
 
         if ( ! preg_match( '/^\d+\.\d+/', $version ) ) {
+            set_transient( $this->cache_key, array(), 1800 );
             return false;
         }
 
-        // Use the zipball of the default branch as the download package.
-        $package = sprintf( 'https://api.github.com/repos/%s/zipball/main', $this->repo );
-
-        return array(
-            'version'   => $version,
-            'package'   => $package,
-            'changelog' => '',
+        $package = sprintf(
+            'https://github.com/%s/archive/refs/heads/%s.zip',
+            $this->repo,
+            $this->branch
         );
+
+        $info = array(
+            'version' => $version,
+            'package' => $package,
+        );
+
+        set_transient( $this->cache_key, $info, $this->cache_ttl );
+        return $info;
     }
 
     /**
