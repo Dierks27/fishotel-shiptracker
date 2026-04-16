@@ -85,6 +85,15 @@ class FST_Tracker {
 
             if ( ! $carrier || ! $carrier->has_credentials() ) {
                 $this->log( sprintf( 'No credentials for carrier: %s', $shipment->carrier ) );
+
+                // Update last_checked so credential-less shipments don't
+                // block the queue — without this they stay at the top of
+                // get_due_for_poll() forever and starve other carriers.
+                FST_Shipment::update( $shipment->id, array(
+                    'last_checked' => current_time( 'mysql' ),
+                    'check_count'  => $shipment->check_count + 1,
+                ) );
+
                 return new WP_Error( 'fst_no_credentials', 'Carrier credentials not configured.' );
             }
 
