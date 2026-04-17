@@ -339,7 +339,7 @@ class FST_Order {
             // Add after order status column.
             if ( 'order_status' === $key ) {
                 $new_columns['fst_tracking']  = __( 'Tracking', 'fishotel-shiptracker' );
-                $new_columns['fst_ship_date'] = __( 'Ship Date', 'fishotel-shiptracker' );
+                $new_columns['fst_ship_date'] = __( 'Delivery Date', 'fishotel-shiptracker' );
             }
         }
         return $new_columns;
