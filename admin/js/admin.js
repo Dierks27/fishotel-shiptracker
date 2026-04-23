@@ -54,21 +54,38 @@
 		 */
 		addTracking: function (e) {
 			e.preventDefault();
+			// Stop the outer WooCommerce order <form> from ever seeing this
+			// click — nested form/JS handlers have been the culprit on this
+			// button multiple times.
+			e.stopPropagation();
 
-			var button = $(e.currentTarget);
-			var container = button.closest('.fst-add-tracking-form');
-			var metabox = $('#fst-tracking-metabox');
+			var button = $('#fst-add-tracking-btn');
+			var messageBox = $('#fst-tracking-message');
+			var orderId = $('#fst-tracking-metabox').data('order-id');
+			var trackingNumber = ($('#fst-tracking-number').val() || '').trim();
+			var carrier = $('#fst-carrier').val() || 'auto';
 
-			var orderId = metabox.data('order-id');
-			var trackingNumber = container.find('#fst-tracking-number').val();
-			var carrier = container.find('#fst-carrier').val();
+			var showMessage = function (type, text) {
+				messageBox
+					.removeClass('notice-success notice-error')
+					.addClass('notice notice-' + type)
+					.html('<p>' + text + '</p>')
+					.show();
+			};
 
-			if (!orderId || !trackingNumber || !carrier) {
-				alert('Please fill in all fields');
-				return;
+			if (!orderId) {
+				showMessage('error', 'Save the order first, then add tracking.');
+				return false;
+			}
+
+			if (!trackingNumber) {
+				showMessage('error', 'Please enter a tracking number.');
+				$('#fst-tracking-number').focus();
+				return false;
 			}
 
 			button.prop('disabled', true).text('Adding...');
+			messageBox.hide();
 
 			$.ajax({
 				url: fst_admin.ajax_url,
@@ -80,31 +97,30 @@
 					tracking_number: trackingNumber,
 					carrier: carrier,
 				},
-				success: $.proxy(function (response) {
-					if (response.success) {
-						// Show success message
-						container.before(
-							'<div class="notice notice-success"><p>' +
-								response.data.message +
-							'</p></div>'
-						);
-
-						// Refresh shipment area
-						this.refreshShipments(orderId);
-
-						// Clear form
-						container.find('#fst-tracking-number').val('');
+				success: function (response) {
+					if (response && response.success) {
+						showMessage('success', response.data.message || 'Tracking added.');
+						$('#fst-tracking-number').val('');
+						// Reload to show the new shipment in the list.
+						// Use replace() so the reload isn't blocked by the
+						// WooCommerce "unsaved changes" prompt.
+						window.location.replace(window.location.href);
 					} else {
-						alert('Error: ' + (response.data && response.data.message ? response.data.message : response.data));
+						var errMsg = (response && response.data && response.data.message)
+							? response.data.message
+							: (response && response.data ? response.data : 'Unknown error.');
+						showMessage('error', 'Error: ' + errMsg);
 					}
-				}, this),
-				error: function () {
-					alert('AJAX error occurred');
+				},
+				error: function (xhr) {
+					showMessage('error', 'Request failed (' + (xhr.status || 'network error') + '). Check the browser console.');
 				},
 				complete: function () {
 					button.prop('disabled', false).text('Add Tracking Info');
 				},
 			});
+
+			return false;
 		},
 
 		/**
