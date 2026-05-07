@@ -3,7 +3,7 @@
  * Plugin Name: FisHotel ShipTracker
  * Plugin URI: https://fishotel.com
  * Description: Self-hosted shipment tracking for WooCommerce. Tracks UPS & USPS packages, sends automated email notifications, and provides a branded tracking page for customers.
- * Version: 1.6.8
+ * Version: 1.7.0
  * Author: FisHotel
  * Author URI: https://fishotel.com
  * Text Domain: fishotel-shiptracker
@@ -19,7 +19,7 @@
 defined( 'ABSPATH' ) || exit;
 
 // Plugin constants
-define( 'FST_VERSION', '1.6.8' );
+define( 'FST_VERSION', '1.7.0' );
 define( 'FST_DB_VERSION', '1.0.0' );
 define( 'FST_PLUGIN_FILE', __FILE__ );
 define( 'FST_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
@@ -48,6 +48,9 @@ final class FisHotel_ShipTracker {
 
     /** @var FST_Checkout|null */
     public $checkout = null;
+
+    /** @var FST_Pickup|null */
+    public $pickup = null;
 
     /**
      * Get the single instance.
@@ -108,6 +111,7 @@ final class FisHotel_ShipTracker {
         require_once FST_PLUGIN_DIR . 'includes/class-fst-email.php';
         require_once FST_PLUGIN_DIR . 'includes/class-fst-myaccount.php';
         require_once FST_PLUGIN_DIR . 'includes/class-fst-checkout.php';
+        require_once FST_PLUGIN_DIR . 'includes/class-fst-pickup.php';
         require_once FST_PLUGIN_DIR . 'includes/class-fst-updater.php';
 
         // Carriers.
@@ -126,6 +130,7 @@ final class FisHotel_ShipTracker {
         $this->order     = new FST_Order();
         $this->myaccount = new FST_MyAccount();
         $this->checkout  = new FST_Checkout();
+        $this->pickup    = new FST_Pickup();
 
         // REST API — FST_REST_API::register_routes() is called directly, no constructor hook.
         $rest_api = new FST_REST_API();
