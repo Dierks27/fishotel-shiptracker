@@ -469,41 +469,48 @@ final class FisHotel_ShipTracker {
             wp_send_json_error( array( 'message' => 'Unauthorized' ), 403 );
         }
 
-        $to = get_option( 'admin_email' );
+        $to     = get_option( 'admin_email' );
+        $status = 'in_transit';
 
-        // Build a sample body using the default "in_transit" template.
-        $defaults = FST_Email::get_defaults();
-        $template = $defaults['in_transit'];
+        $tracking_number = '1Z999AA10123456784';
+        $carrier_url     = 'https://www.ups.com/track?tracknum=' . $tracking_number;
+        $accent          = FST_Carrier::get_status_color( $status );
 
-        // Replace shortcodes with sample data.
-        $sample_replacements = array(
+        $sample_events = '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:16px 0;border:1px solid #eee;border-radius:6px;overflow:hidden;">'
+            . '<tr><td style="background:#f9f9f9;padding:10px 16px;font-size:13px;font-weight:600;color:#444;border-bottom:1px solid #eee;">Recent Tracking Updates</td></tr>'
+            . '<tr><td style="padding:10px 16px;border-bottom:1px solid #f0f0f0;"><div style="font-size:13px;color:#333;font-weight:500;">Departed facility</div><div style="font-size:11px;color:#999;margin-top:2px;">Louisville, KY &middot; ' . date_i18n( get_option( 'date_format' ) . ' ' . get_option( 'time_format' ) ) . '</div></td></tr>'
+            . '<tr><td style="padding:10px 16px;"><div style="font-size:13px;color:#333;font-weight:500;">Arrived at facility</div><div style="font-size:11px;color:#999;margin-top:2px;">Memphis, TN &middot; ' . date_i18n( get_option( 'date_format' ) . ' ' . get_option( 'time_format' ), strtotime( '-4 hours' ) ) . '</div></td></tr>'
+            . '</table>';
+
+        $progress = FST_Email::render_progress_bar( $status );
+
+        $replacements = array(
             '{customer_name}'        => 'John',
             '{order_number}'         => '12345',
-            '{tracking_number}'      => '1Z999AA10123456784',
+            '{tracking_number}'      => $tracking_number,
             '{carrier}'              => 'UPS',
-            '{status}'               => 'In Transit',
+            '{tracking_url}'         => home_url( '/shipment-tracking/?tracking=' . urlencode( $tracking_number ) ),
+            '{carrier_tracking_url}' => $carrier_url,
+            '{status}'               => FST_Carrier::get_status_label( $status ),
             '{status_detail}'        => 'Package is moving through the UPS network',
             '{est_delivery}'         => date_i18n( get_option( 'date_format' ), strtotime( '+2 days' ) ),
             '{ship_date}'            => date_i18n( get_option( 'date_format' ), strtotime( '-1 day' ) ),
-            '{carrier_tracking_url}' => 'https://www.ups.com/track?tracknum=1Z999AA10123456784',
-            '{tracking_progress}'    => FST_Email::render_progress_bar( 'in_transit' ),
-            '{tracking_events}'      => '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:16px 0;border:1px solid #eee;border-radius:6px;overflow:hidden;">'
-                . '<tr><td style="background:#f9f9f9;padding:10px 16px;font-size:13px;font-weight:600;color:#444;border-bottom:1px solid #eee;">Recent Tracking Updates</td></tr>'
-                . '<tr><td style="padding:10px 16px;border-bottom:1px solid #f0f0f0;"><div style="font-size:13px;color:#333;font-weight:500;">Departed facility</div><div style="font-size:11px;color:#999;margin-top:2px;">Louisville, KY &middot; ' . date_i18n( get_option( 'date_format' ) . ' ' . get_option( 'time_format' ) ) . '</div></td></tr>'
-                . '<tr><td style="padding:10px 16px;"><div style="font-size:13px;color:#333;font-weight:500;">Arrived at facility</div><div style="font-size:11px;color:#999;margin-top:2px;">Memphis, TN &middot; ' . date_i18n( get_option( 'date_format' ) . ' ' . get_option( 'time_format' ), strtotime( '-4 hours' ) ) . '</div></td></tr>'
-                . '</table>',
+            '{tracking_progress}'    => $progress,
+            '{tracking_timeline}'    => $progress,
+            '{tracking_events}'      => $sample_events,
             '{order_summary}'        => '',
-            '{track_button}'         => FST_Email::render_track_button( 'https://www.ups.com/track?tracknum=1Z999AA10123456784', 'Track Your Package', '#2196f3' ),
+            '{track_button}'         => FST_Email::render_track_button( $carrier_url, 'Track Your Package', $accent ),
         );
 
-        $subject = str_replace( array_keys( $sample_replacements ), array_values( $sample_replacements ), $template['subject'] );
-        $body    = str_replace( array_keys( $sample_replacements ), array_values( $sample_replacements ), $template['body'] );
+        $rendered = FST_Tracker::render_status_email( $status, $replacements );
 
-        $subject = '[TEST] ' . $subject;
-        $html    = FST_Email::wrap( nl2br( $body ), 'in_transit' );
+        if ( ! $rendered ) {
+            wp_send_json_error( array( 'message' => 'No email template configured for status: ' . $status ) );
+        }
 
+        $subject = '[TEST] ' . $rendered['subject'];
         $headers = array( 'Content-Type: text/html; charset=UTF-8' );
-        $sent    = wp_mail( $to, $subject, $html, $headers );
+        $sent    = wp_mail( $to, $subject, $rendered['html_body'], $headers );
 
         if ( $sent ) {
             wp_send_json_success( array( 'message' => 'Test email sent to ' . $to ) );
