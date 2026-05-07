@@ -240,6 +240,32 @@ class FST_Tracker {
      * @param bool     $is_admin
      */
     private function send_email( $shipment, $order, $status, $to, $is_admin = false ) {
+        $replacements = $this->build_replacements( $shipment, $order );
+        $rendered     = self::render_status_email( $status, $replacements, $is_admin );
+
+        if ( ! $rendered ) {
+            $this->log( sprintf( 'No email template for status: %s', $status ) );
+            return;
+        }
+
+        $headers = array( 'Content-Type: text/html; charset=UTF-8' );
+        $sent    = wp_mail( $to, $rendered['subject'], $rendered['html_body'], $headers );
+        $this->log( sprintf( 'Email to %s for %s status: %s', $to, $status, $sent ? 'sent' : 'FAILED' ) );
+    }
+
+    /**
+     * Render a status email using the saved (or default) template.
+     *
+     * Shared by both the real status-change email path and the
+     * "Send Test Email" handler so previews always reflect the
+     * admin's saved templates.
+     *
+     * @param string $status        Shipment status slug.
+     * @param array  $replacements  Map of shortcode => value.
+     * @param bool   $is_admin      Whether this is an admin-recipient email.
+     * @return array|null { subject, html_body } or null if no template exists.
+     */
+    public static function render_status_email( $status, array $replacements, $is_admin = false ) {
         $templates = get_option( 'fst_email_templates', array() );
         $template  = isset( $templates[ $status ] ) ? $templates[ $status ] : null;
 
@@ -250,24 +276,20 @@ class FST_Tracker {
         }
 
         if ( ! $template || empty( $template['subject'] ) || empty( $template['body'] ) ) {
-            $this->log( sprintf( 'No email template for status: %s', $status ) );
-            return;
+            return null;
         }
 
-        $subject = $this->replace_shortcodes( $template['subject'], $shipment, $order );
-        $body    = $this->replace_shortcodes( $template['body'], $shipment, $order );
+        $subject = str_replace( array_keys( $replacements ), array_values( $replacements ), $template['subject'] );
+        $body    = str_replace( array_keys( $replacements ), array_values( $replacements ), $template['body'] );
 
         if ( $is_admin ) {
             $subject = '[Admin] ' . $subject;
         }
 
-        // Convert newlines to <br> and wrap in branded HTML template.
-        $html_body = FST_Email::wrap( nl2br( $body ), $status );
-
-        $headers = array( 'Content-Type: text/html; charset=UTF-8' );
-
-        $sent = wp_mail( $to, $subject, $html_body, $headers );
-        $this->log( sprintf( 'Email to %s for %s status: %s', $to, $status, $sent ? 'sent' : 'FAILED' ) );
+        return array(
+            'subject'   => $subject,
+            'html_body' => FST_Email::wrap( nl2br( $body ), $status ),
+        );
     }
 
     /**
@@ -353,11 +375,23 @@ class FST_Tracker {
      * @return string
      */
     public function replace_shortcodes( $template, $shipment, $order ) {
+        $replacements = $this->build_replacements( $shipment, $order );
+        return str_replace( array_keys( $replacements ), array_values( $replacements ), $template );
+    }
+
+    /**
+     * Build the shortcode => value map for a real shipment + order.
+     *
+     * @param object   $shipment  Shipment row (stdClass).
+     * @param WC_Order $order
+     * @return array
+     */
+    public function build_replacements( $shipment, $order ) {
         $carrier     = $this->get_carrier_instance( $shipment->carrier );
         $carrier_url = $carrier ? $carrier->get_tracking_url( $shipment->tracking_number ) : '';
         $accent      = FST_Carrier::get_status_color( $shipment->status );
 
-        $replacements = array(
+        return array(
             '{tracking_number}'      => $shipment->tracking_number,
             '{carrier}'              => strtoupper( $shipment->carrier ),
             '{tracking_url}'         => home_url( '/shipment-tracking/?tracking=' . urlencode( $shipment->tracking_number ) ),
@@ -374,8 +408,6 @@ class FST_Tracker {
             '{order_summary}'        => FST_Email::render_order_summary( $order ),
             '{track_button}'         => FST_Email::render_track_button( $carrier_url ?: '', 'Track Your Package', $accent ),
         );
-
-        return str_replace( array_keys( $replacements ), array_values( $replacements ), $template );
     }
 
     /**
