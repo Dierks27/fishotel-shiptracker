@@ -1,6 +1,6 @@
 # FisHotel ShipTracker - Project Overview & Instruction Manual
 
-**Version:** 1.5.3
+**Version:** 1.8.0
 **Author:** FisHotel
 **Type:** WordPress / WooCommerce Plugin (Proprietary)
 **Repository:** Dierks27/fishotel-shiptracker
@@ -9,10 +9,11 @@
 
 ## What This Plugin Does
 
-FisHotel ShipTracker is a self-hosted shipment tracking plugin for WooCommerce. It connects to UPS and USPS via their OAuth 2.0 APIs, automatically polls for tracking updates, and keeps your customers informed with branded email notifications.
+FisHotel ShipTracker is a self-hosted shipment tracking plugin for WooCommerce. It connects to UPS and USPS via their OAuth 2.0 APIs, automatically polls for tracking updates, and keeps your customers informed with branded email notifications. USPS can optionally be routed through EasyPost (a tracking aggregator) so packages printed under any Mailer ID can be tracked despite the April 2026 USPS Access Control restriction.
 
 Key capabilities:
 - Automatic tracking of UPS and USPS shipments
+- Optional EasyPost routing for USPS (webhook-driven, MID-independent)
 - Branded HTML email notifications on every status change
 - Customer-facing tracking on the My Account page
 - Admin analytics dashboard with date range filtering
@@ -67,10 +68,14 @@ The **Migration** tool is located under Settings > Migration tab.
 ### Carriers
 - **UPS** - Client ID, Client Secret, Test Connection button
 - **USPS** - Client ID, Client Secret, Test Connection button
+- **EasyPost (USPS Aggregator)** - Production/Test API keys, Webhook Secret (with Generate button), Test Mode, USPS Routing (Auto/Always/Never), Test Connection button, and the read-only Webhook URL to paste into the EasyPost dashboard
 
 Credentials are OAuth 2.0 client credentials obtained from:
 - UPS: https://developer.ups.com
 - USPS: https://developer.usps.com
+- EasyPost: https://www.easypost.com (API key + webhook secret)
+
+**EasyPost routing modes:** `auto` uses EasyPost when configured (recommended), `always` prefers EasyPost for every USPS shipment, `never` forces direct USPS polling. When configured, new USPS shipments are registered with EasyPost (which pushes updates to the webhook), USPS direct polls that hit a 403 are auto-promoted to EasyPost, and EasyPost-tracked shipments are skipped in the cron poll loop.
 
 ### Status Actions
 Configure what happens when a shipment reaches each status:
@@ -193,8 +198,9 @@ The plugin creates two custom tables:
 - id, order_id, tracking_number, carrier, status, status_detail
 - ship_date, est_delivery, delivered_date
 - last_checked, last_event_at, tracking_data, check_count
+- easypost_tracker_id, tracker_provider (EasyPost integration; DB version 1.1.0)
 - created_at, updated_at
-- Indexes on: order_id, tracking_number, status, carrier, last_checked
+- Indexes on: order_id, tracking_number, status, carrier, last_checked, easypost_tracker_id, tracker_provider
 
 **`wp_fst_tracking_events`** - Individual tracking events per shipment
 - id, shipment_id, status, description, location, event_time, raw_data, created_at
@@ -221,7 +227,8 @@ fishotel-shiptracker/
 │   ├── class-fst-rest-api.php       # REST API endpoints
 │   ├── class-fst-settings.php       # Settings page with all tabs
 │   ├── class-fst-shipment.php       # Shipment data model (CRUD, queries, analytics)
-│   ├── class-fst-tracker.php        # Polling engine (cron-driven)
+│   ├── class-fst-tracker.php        # Polling engine (cron-driven) + EasyPost poll/promote/backfill
+│   ├── class-fst-easypost.php       # EasyPost aggregator (trackers, webhook, signature, backfill)
 │   ├── class-fst-updater.php        # GitHub release auto-updater
 │   └── carriers/
 │       ├── class-fst-carrier.php      # Abstract carrier base class
@@ -240,8 +247,11 @@ fishotel-shiptracker/
 | `/fst/v1/shipment/{id}/recheck` | POST | Admin | Force tracking update |
 | `/fst/v1/track` | POST | Public | Customer lookup by order # + email |
 | `/fst/v1/analytics` | GET | Admin | Status counts and late shipments |
+| `/fst/v1/easypost-webhook` | POST | HMAC | EasyPost tracker.created/updated push |
 
 The public `/track` endpoint validates order number + billing email and returns the same error for missing orders and email mismatches to prevent order enumeration.
+
+The `/easypost-webhook` endpoint has no WordPress capability check (`permission_callback => __return_true`); it is authenticated by an HMAC-SHA256 signature in the `X-Hmac-Signature` header, verified against the configured webhook secret. Invalid/missing signatures return 401, malformed JSON returns 400, and an unresolved shipment returns 422.
 
 ### Shipment Statuses
 | Status | Terminal? | Description |

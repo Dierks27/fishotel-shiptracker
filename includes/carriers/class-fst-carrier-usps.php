@@ -12,7 +12,7 @@ class FST_Carrier_USPS extends FST_Carrier {
     protected $slug = 'usps';
     protected $name = 'USPS';
 
-    const API_BASE = 'https://api.usps.com';
+    const API_BASE = 'https://apis.usps.com';
 
     /**
      * Check if credentials are configured.
@@ -109,7 +109,21 @@ class FST_Carrier_USPS extends FST_Carrier {
             return new WP_Error( 'fst_usps_rate_limited', 'USPS rate limit reached. Will retry next cycle.' );
         }
 
-        $body = json_decode( wp_remote_retrieve_body( $response ), true );
+        $body_raw = wp_remote_retrieve_body( $response );
+
+        // Access Control (April 2026): USPS returns 403 when our account is not
+        // authorized for the Mailer ID embedded in this barcode. This is by
+        // design and never resolves on its own — surface a distinct error code
+        // so the tracker can re-route the shipment through EasyPost.
+        if ( 403 === $code ) {
+            $this->log( 'Access denied (403) for ' . $tracking_number . ' — body: ' . $body_raw );
+            return new WP_Error(
+                'fst_usps_access_denied',
+                'USPS denied access to this tracking number. The package was shipped under a Mailer ID your USPS account is not authorized for (Access Control, launched April 2026). If EasyPost is configured, this shipment will be re-routed automatically. For packages you ship yourself, accept the updated T&Cs in the USPS Business Portal under My Apps → Developer Apps → Manage.'
+            );
+        }
+
+        $body = json_decode( $body_raw, true );
 
         if ( 200 !== $code ) {
             $this->log( 'Track failed for ' . $tracking_number . ': HTTP ' . $code );
@@ -135,7 +149,8 @@ class FST_Carrier_USPS extends FST_Carrier {
             'raw'            => $body,
         );
 
-        $tracking = $body['trackingNumber'] ?? $body['tracking'] ?? $body;
+        // The v3 tracking response is flat at the root.
+        $tracking = $body;
 
         // Current status.
         $status_category = $tracking['statusCategory'] ?? '';

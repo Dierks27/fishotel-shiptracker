@@ -22,6 +22,9 @@ class FST_Activator {
         self::set_default_options();
         self::schedule_events();
 
+        // Schedule a one-shot EasyPost backfill of in-flight USPS shipments.
+        update_option( 'fst_easypost_backfill_pending', 'yes' );
+
         update_option( 'fst_db_version', FST_DB_VERSION );
         update_option( 'fst_activated', true );
 
@@ -37,6 +40,14 @@ class FST_Activator {
 
         if ( version_compare( $current_version, FST_DB_VERSION, '<' ) ) {
             self::create_tables();
+
+            // Migrating from before EasyPost support — schedule the one-shot
+            // backfill so in-flight USPS shipments get registered with EasyPost
+            // on the next cron run.
+            if ( version_compare( $current_version, '1.1.0', '<' ) ) {
+                update_option( 'fst_easypost_backfill_pending', 'yes' );
+            }
+
             update_option( 'fst_db_version', FST_DB_VERSION );
         }
 
@@ -71,6 +82,8 @@ class FST_Activator {
             last_checked datetime DEFAULT NULL,
             last_event_at datetime DEFAULT NULL,
             tracking_data longtext,
+            easypost_tracker_id varchar(64) NOT NULL DEFAULT '',
+            tracker_provider varchar(20) NOT NULL DEFAULT '',
             check_count int(11) NOT NULL DEFAULT 0,
             created_at datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
             updated_at datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -79,7 +92,9 @@ class FST_Activator {
             KEY tracking_number (tracking_number),
             KEY status (status),
             KEY carrier (carrier),
-            KEY last_checked (last_checked)
+            KEY last_checked (last_checked),
+            KEY easypost_tracker_id (easypost_tracker_id),
+            KEY tracker_provider (tracker_provider)
         ) {$charset_collate};
 
         CREATE TABLE {$events_table} (
@@ -121,6 +136,13 @@ class FST_Activator {
             // USPS credentials.
             'fst_usps_client_id'     => '',
             'fst_usps_client_secret' => '',
+
+            // EasyPost aggregator (USPS routing).
+            'fst_easypost_production_key' => '',
+            'fst_easypost_test_key'       => '',
+            'fst_easypost_webhook_secret' => '',
+            'fst_easypost_test_mode'      => 'no',   // 'yes' | 'no'
+            'fst_easypost_usps_routing'   => 'auto', // 'auto' | 'always' | 'never'
 
             // Status actions — what happens on each status change.
             // Format: array of actions per status.

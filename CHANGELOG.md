@@ -2,6 +2,18 @@
 
 All notable changes to FisHotel ShipTracker will be documented in this file.
 
+## [1.8.0]
+
+- Added EasyPost integration to track USPS packages regardless of the Mailer ID in the barcode (works around the April 2026 USPS Access Control change that returns HTTP 403 for dropshipper-printed labels)
+- New EasyPost settings under Carriers: Production/Test API keys, webhook secret with generator, test mode, USPS routing (Auto/Always/Never), connection test, and the webhook URL to register
+- New webhook endpoint `POST /wp-json/fst/v1/easypost-webhook` with HMAC-SHA256 signature verification — EasyPost pushes status updates instead of us polling
+- New USPS tracking numbers are auto-registered with EasyPost when configured; EasyPost-tracked shipments are skipped in the cron poll loop
+- USPS direct polls that return HTTP 403 are now auto-promoted to EasyPost
+- One-shot backfill on upgrade registers in-flight USPS shipments with EasyPost
+- Added `easypost_tracker_id` and `tracker_provider` columns (DB version 1.1.0)
+- Fixed USPS API base host (`api.usps.com` → `apis.usps.com`)
+- UPS tracking is unchanged
+
 ## [1.3.0]
 
 - Added analytics dashboard with KPIs and 30-day shipment charts

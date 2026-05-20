@@ -3,7 +3,7 @@
  * Plugin Name: FisHotel ShipTracker
  * Plugin URI: https://fishotel.com
  * Description: Self-hosted shipment tracking for WooCommerce. Tracks UPS & USPS packages, sends automated email notifications, and provides a branded tracking page for customers.
- * Version: 1.7.0
+ * Version: 1.8.0
  * Author: FisHotel
  * Author URI: https://fishotel.com
  * Text Domain: fishotel-shiptracker
@@ -19,8 +19,8 @@
 defined( 'ABSPATH' ) || exit;
 
 // Plugin constants
-define( 'FST_VERSION', '1.7.0' );
-define( 'FST_DB_VERSION', '1.0.0' );
+define( 'FST_VERSION', '1.8.0' );
+define( 'FST_DB_VERSION', '1.1.0' );
 define( 'FST_PLUGIN_FILE', __FILE__ );
 define( 'FST_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
 define( 'FST_PLUGIN_URL', plugin_dir_url( __FILE__ ) );
@@ -118,6 +118,9 @@ final class FisHotel_ShipTracker {
         require_once FST_PLUGIN_DIR . 'includes/carriers/class-fst-carrier.php';
         require_once FST_PLUGIN_DIR . 'includes/carriers/class-fst-carrier-ups.php';
         require_once FST_PLUGIN_DIR . 'includes/carriers/class-fst-carrier-usps.php';
+
+        // Aggregators.
+        require_once FST_PLUGIN_DIR . 'includes/class-fst-easypost.php';
     }
 
     /**
@@ -168,6 +171,9 @@ final class FisHotel_ShipTracker {
 
         // Test carrier connection AJAX handlers.
         add_action( 'wp_ajax_fst_test_carrier', array( $this, 'ajax_test_carrier' ) );
+
+        // Test EasyPost connection AJAX handler.
+        add_action( 'wp_ajax_fst_test_easypost', array( $this, 'ajax_test_easypost' ) );
 
         // GitHub auto-updater.
         new FST_Updater( array(
@@ -567,6 +573,30 @@ final class FisHotel_ShipTracker {
         } else {
             wp_send_json_error( array( 'message' => 'Unknown carrier: "' . $carrier . '"' ) );
         }
+    }
+
+    /**
+     * AJAX: Test the EasyPost API connection.
+     */
+    public function ajax_test_easypost() {
+        check_ajax_referer( 'fst_nonce', 'nonce' );
+
+        if ( ! current_user_can( 'manage_woocommerce' ) ) {
+            wp_send_json_error( array( 'message' => 'Unauthorized' ), 403 );
+        }
+
+        if ( ! FST_EasyPost::has_credentials() ) {
+            $mode = FST_EasyPost::is_test_mode() ? 'Test' : 'Production';
+            wp_send_json_error( array( 'message' => $mode . ' API key not configured. Please save settings first.' ) );
+        }
+
+        $result = FST_EasyPost::test_connection();
+        if ( is_wp_error( $result ) ) {
+            wp_send_json_error( array( 'message' => $result->get_error_message() ) );
+        }
+
+        $mode = FST_EasyPost::is_test_mode() ? 'test' : 'production';
+        wp_send_json_success( array( 'message' => 'EasyPost connection successful! (' . $mode . ' mode)' ) );
     }
 
     /**
