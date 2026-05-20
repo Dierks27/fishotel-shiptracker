@@ -80,6 +80,9 @@ class FST_Order {
                                     <?php echo esc_html( FST_Carrier::get_status_label( $shipment->status ) ); ?>
                                 </span>
                                 <span class="fst-carrier-label"><?php echo esc_html( strtoupper( $shipment->carrier ) ); ?></span>
+                                <?php if ( isset( $shipment->tracker_provider ) && 'easypost' === $shipment->tracker_provider ) : ?>
+                                    <span class="fst-ep-badge" title="Tracked via EasyPost" style="display:inline-block;margin-left:4px;padding:1px 6px;border-radius:3px;background:#eef2ff;color:#3730a3;font-size:10px;font-weight:600;letter-spacing:0.3px;">via EP</span>
+                                <?php endif; ?>
                             </div>
                             <div class="fst-tracking-number">
                                 <a href="<?php echo esc_url( $this->get_carrier_url( $shipment ) ); ?>" target="_blank">
@@ -165,6 +168,22 @@ class FST_Order {
     }
 
     /**
+     * Whether a shipment for the given carrier should be routed through EasyPost.
+     *
+     * @param string $carrier Carrier slug.
+     * @return bool
+     */
+    private function should_route_via_easypost( $carrier ) {
+        if ( 'usps' !== $carrier ) {
+            return false;
+        }
+        if ( 'never' === get_option( 'fst_easypost_usps_routing', 'auto' ) ) {
+            return false;
+        }
+        return FST_EasyPost::has_credentials();
+    }
+
+    /**
      * AJAX: Add tracking to an order.
      */
     public function ajax_add_tracking() {
@@ -206,11 +225,29 @@ class FST_Order {
             wp_send_json_error( 'Failed to save tracking data.' );
         }
 
-        // Immediately poll for status.
-        $carrier_instance = $this->get_carrier_instance( $carrier );
-        if ( $carrier_instance && $carrier_instance->has_credentials() ) {
-            $tracker = new FST_Tracker();
-            $tracker->poll_shipment( FST_Shipment::get( $shipment_id ) );
+        // Route USPS through EasyPost when configured. If EasyPost fails
+        // (network, bad key, etc.), fall through to the direct-poll path so we
+        // degrade gracefully.
+        $routed_via_easypost = false;
+        if ( $this->should_route_via_easypost( $carrier ) ) {
+            $ep_tracker = FST_EasyPost::create_tracker( $tracking_number, $carrier );
+            if ( ! is_wp_error( $ep_tracker ) ) {
+                FST_Shipment::update( $shipment_id, array(
+                    'easypost_tracker_id' => isset( $ep_tracker['id'] ) ? $ep_tracker['id'] : '',
+                    'tracker_provider'    => 'easypost',
+                ) );
+                FST_EasyPost::apply_tracker_to_shipment( FST_Shipment::get( $shipment_id ), $ep_tracker );
+                $routed_via_easypost = true;
+            }
+        }
+
+        // Immediately poll for status via the direct carrier API (unless EasyPost handled it).
+        if ( ! $routed_via_easypost ) {
+            $carrier_instance = $this->get_carrier_instance( $carrier );
+            if ( $carrier_instance && $carrier_instance->has_credentials() ) {
+                $tracker = new FST_Tracker();
+                $tracker->poll_shipment( FST_Shipment::get( $shipment_id ) );
+            }
         }
 
         // Add order note and move out of Processing.

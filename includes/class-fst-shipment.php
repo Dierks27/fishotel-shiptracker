@@ -65,6 +65,47 @@ class FST_Shipment {
     }
 
     /**
+     * Get a shipment by its EasyPost tracker ID.
+     *
+     * @param string $tracker_id
+     * @return object|null
+     */
+    public static function get_by_easypost_tracker( $tracker_id ) {
+        global $wpdb;
+        if ( empty( $tracker_id ) ) {
+            return null;
+        }
+        return $wpdb->get_row( $wpdb->prepare(
+            "SELECT * FROM " . self::table() . " WHERE easypost_tracker_id = %s LIMIT 1", $tracker_id
+        ) );
+    }
+
+    /**
+     * Get non-terminal USPS shipments not yet registered with EasyPost.
+     *
+     * Used by the one-shot backfill that runs after upgrading to EasyPost support.
+     *
+     * @return array
+     */
+    public static function get_active_for_easypost_backfill() {
+        global $wpdb;
+
+        $terminal     = array( 'delivered', 'failure', 'return_to_sender' );
+        $placeholders = implode( ',', array_fill( 0, count( $terminal ), '%s' ) );
+
+        $params = array_merge( array( 'usps' ), $terminal );
+
+        return $wpdb->get_results( $wpdb->prepare(
+            "SELECT * FROM " . self::table() . "
+             WHERE carrier = %s
+             AND status NOT IN ({$placeholders})
+             AND ( easypost_tracker_id IS NULL OR easypost_tracker_id = '' )
+             ORDER BY id ASC",
+            ...$params
+        ) );
+    }
+
+    /**
      * Create a new shipment.
      *
      * @param array $data {
@@ -80,21 +121,23 @@ class FST_Shipment {
         global $wpdb;
 
         $defaults = array(
-            'order_id'        => 0,
-            'tracking_number' => '',
-            'carrier'         => 'ups',
-            'status'          => 'unknown',
-            'status_detail'   => '',
-            'ship_date'       => current_time( 'mysql' ),
-            'check_count'     => 0,
-            'created_at'      => current_time( 'mysql' ),
-            'updated_at'      => current_time( 'mysql' ),
+            'order_id'            => 0,
+            'tracking_number'     => '',
+            'carrier'             => 'ups',
+            'status'              => 'unknown',
+            'status_detail'       => '',
+            'ship_date'           => current_time( 'mysql' ),
+            'easypost_tracker_id' => '',
+            'tracker_provider'    => '',
+            'check_count'         => 0,
+            'created_at'          => current_time( 'mysql' ),
+            'updated_at'          => current_time( 'mysql' ),
         );
 
         $data = wp_parse_args( $data, $defaults );
 
         $result = $wpdb->insert( self::table(), $data, array(
-            '%d', '%s', '%s', '%s', '%s', '%s', '%d', '%s', '%s',
+            '%d', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%d', '%s', '%s',
         ) );
 
         if ( false === $result ) {
@@ -220,6 +263,7 @@ class FST_Shipment {
         $sql = $wpdb->prepare(
             "SELECT * FROM " . self::table() . "
              WHERE status NOT IN ({$placeholders})
+             AND ( tracker_provider IS NULL OR tracker_provider != 'easypost' )
              AND (
                  last_checked IS NULL
                  OR (status = 'out_for_delivery' AND last_checked < DATE_SUB(%s, INTERVAL %d MINUTE))

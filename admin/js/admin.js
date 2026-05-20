@@ -45,6 +45,15 @@
 			$(document).on('click', '#fst_test_ups', $.proxy(function () { this.testCarrier('ups', '#fst_test_ups'); }, this));
 			$(document).on('click', '#fst_test_usps', $.proxy(function () { this.testCarrier('usps', '#fst_test_usps'); }, this));
 
+			// Test EasyPost connection button
+			$(document).on('click', '#fst_test_easypost', $.proxy(this.testEasyPost, this));
+
+			// Generate a webhook secret client-side
+			$(document).on('click', '#fst_generate_webhook_secret', $.proxy(this.generateWebhookSecret, this));
+
+			// Copy the webhook URL to the clipboard
+			$(document).on('click', '#fst_copy_webhook_url', $.proxy(this.copyWebhookUrl, this));
+
 			// Send test email button
 			$(document).on('click', '#fst-send-test-email', $.proxy(this.sendTestEmail, this));
 		},
@@ -280,6 +289,106 @@
 					button.prop('disabled', false).text(originalText);
 				},
 			});
+		},
+
+		/**
+		 * Test EasyPost API connection
+		 */
+		testEasyPost: function (e) {
+			e.preventDefault();
+
+			var button = $('#fst_test_easypost');
+			var originalText = button.text();
+			var resultSpan = button.next('.fst-test-result');
+
+			if (!resultSpan.length) {
+				button.after('<span class="fst-test-result" style="margin-left:10px;font-weight:500;"></span>');
+				resultSpan = button.next('.fst-test-result');
+			}
+
+			button.prop('disabled', true).text('Testing...');
+			resultSpan.text('').css('color', '');
+
+			$.ajax({
+				url: fst_admin.ajax_url,
+				type: 'POST',
+				data: {
+					action: 'fst_test_easypost',
+					nonce: fst_admin.nonce,
+				},
+				success: function (response) {
+					if (response.success) {
+						resultSpan.text(response.data.message).css('color', '#46b450');
+					} else {
+						resultSpan.text(response.data.message).css('color', '#dc3232');
+					}
+				},
+				error: function () {
+					resultSpan.text('Connection failed - AJAX error').css('color', '#dc3232');
+				},
+				complete: function () {
+					button.prop('disabled', false).text(originalText);
+				},
+			});
+		},
+
+		/**
+		 * Generate a random 40-character webhook secret and fill the input.
+		 * The user copies this into the EasyPost dashboard; the server stores
+		 * it verbatim on save.
+		 */
+		generateWebhookSecret: function (e) {
+			e.preventDefault();
+
+			var chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+			var secret = '';
+			var cryptoObj = window.crypto || window.msCrypto;
+
+			if (cryptoObj && cryptoObj.getRandomValues) {
+				var values = new Uint32Array(40);
+				cryptoObj.getRandomValues(values);
+				for (var i = 0; i < 40; i++) {
+					secret += chars.charAt(values[i] % chars.length);
+				}
+			} else {
+				for (var j = 0; j < 40; j++) {
+					secret += chars.charAt(Math.floor(Math.random() * chars.length));
+				}
+			}
+
+			$('#fst_easypost_webhook_secret').val(secret);
+		},
+
+		/**
+		 * Copy the webhook URL to the clipboard.
+		 */
+		copyWebhookUrl: function (e) {
+			e.preventDefault();
+
+			var input = document.getElementById('fst_easypost_webhook_url');
+			if (!input) {
+				return;
+			}
+
+			input.select();
+			input.setSelectionRange(0, 99999);
+
+			try {
+				if (navigator.clipboard && navigator.clipboard.writeText) {
+					navigator.clipboard.writeText(input.value);
+				} else {
+					document.execCommand('copy');
+				}
+			} catch (err) {
+				// Ignore — the value is selected for manual copy as a fallback.
+			}
+
+			var button = $(e.currentTarget);
+			var original = button.text();
+			button.text('Copied!');
+			setTimeout(function () {
+				button.text(original);
+			}, 1500);
 		},
 
 		/**

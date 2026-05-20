@@ -49,6 +49,13 @@ class FST_REST_API {
             'callback'            => array( $this, 'get_analytics' ),
             'permission_callback' => array( $this, 'admin_check' ),
         ) );
+
+        // EasyPost webhook (public — authenticated by HMAC signature).
+        register_rest_route( $this->namespace, '/easypost-webhook', array(
+            'methods'             => WP_REST_Server::CREATABLE,
+            'callback'            => array( $this, 'easypost_webhook' ),
+            'permission_callback' => '__return_true',
+        ) );
     }
 
     /**
@@ -206,6 +213,33 @@ class FST_REST_API {
         }
 
         return new WP_REST_Response( array( 'shipments' => $data ), 200 );
+    }
+
+    /**
+     * POST /easypost-webhook
+     *
+     * Authenticated by HMAC-SHA256 signature, not by a WordPress capability.
+     */
+    public function easypost_webhook( $request ) {
+        $raw_body  = $request->get_body();
+        $signature = $request->get_header( 'X-Hmac-Signature' );
+
+        // Verify the signature before doing anything else.
+        if ( ! FST_EasyPost::verify_signature( $raw_body, $signature ) ) {
+            return new WP_REST_Response( array( 'error' => 'Invalid signature' ), 401 );
+        }
+
+        $decoded = json_decode( $raw_body, true );
+        if ( ! is_array( $decoded ) ) {
+            return new WP_REST_Response( array( 'error' => 'Malformed JSON' ), 400 );
+        }
+
+        $result = FST_EasyPost::handle_webhook( $decoded );
+        if ( is_wp_error( $result ) ) {
+            return new WP_REST_Response( array( 'error' => $result->get_error_message() ), 422 );
+        }
+
+        return new WP_REST_Response( array( 'ok' => true ), 200 );
     }
 
     /**

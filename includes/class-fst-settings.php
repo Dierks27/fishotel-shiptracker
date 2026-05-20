@@ -213,6 +213,13 @@ class FST_Settings {
         $usps_client_id     = get_option( 'fst_usps_client_id', '' );
         $usps_client_secret = get_option( 'fst_usps_client_secret', '' );
 
+        $ep_production_key  = get_option( 'fst_easypost_production_key', '' );
+        $ep_test_key        = get_option( 'fst_easypost_test_key', '' );
+        $ep_webhook_secret  = get_option( 'fst_easypost_webhook_secret', '' );
+        $ep_test_mode       = get_option( 'fst_easypost_test_mode', 'no' );
+        $ep_usps_routing    = get_option( 'fst_easypost_usps_routing', 'auto' );
+        $ep_webhook_url     = rest_url( 'fst/v1/easypost-webhook' );
+
         ?>
         <h3><?php esc_html_e( 'UPS Configuration', 'fishotel-shiptracker' ); ?></h3>
         <table class="form-table">
@@ -262,6 +269,76 @@ class FST_Settings {
                 <th scope="row"></th>
                 <td>
                     <button type="button" class="button" id="fst_test_usps"><?php esc_html_e( 'Test USPS Connection', 'fishotel-shiptracker' ); ?></button>
+                </td>
+            </tr>
+        </table>
+
+        <h3><?php esc_html_e( 'EasyPost (USPS Aggregator)', 'fishotel-shiptracker' ); ?></h3>
+        <p class="description" style="max-width: 640px;">
+            <?php esc_html_e( 'Since the April 2026 USPS Access Control change, USPS only returns tracking for packages printed under your own Mailer ID. Routing USPS through EasyPost tracks any USPS package regardless of who printed the label. EasyPost pushes updates to the webhook URL below.', 'fishotel-shiptracker' ); ?>
+        </p>
+        <table class="form-table">
+            <tr>
+                <th scope="row">
+                    <label for="fst_easypost_production_key"><?php esc_html_e( 'Production API Key', 'fishotel-shiptracker' ); ?></label>
+                </th>
+                <td>
+                    <input type="text" id="fst_easypost_production_key" name="fst_easypost_production_key" value="<?php echo esc_attr( $ep_production_key ); ?>" class="regular-text" autocomplete="off">
+                </td>
+            </tr>
+            <tr>
+                <th scope="row">
+                    <label for="fst_easypost_test_key"><?php esc_html_e( 'Test API Key', 'fishotel-shiptracker' ); ?></label>
+                </th>
+                <td>
+                    <input type="text" id="fst_easypost_test_key" name="fst_easypost_test_key" value="<?php echo esc_attr( $ep_test_key ); ?>" class="regular-text" autocomplete="off">
+                </td>
+            </tr>
+            <tr>
+                <th scope="row">
+                    <label for="fst_easypost_webhook_secret"><?php esc_html_e( 'Webhook Secret', 'fishotel-shiptracker' ); ?></label>
+                </th>
+                <td>
+                    <input type="text" id="fst_easypost_webhook_secret" name="fst_easypost_webhook_secret" value="<?php echo esc_attr( $ep_webhook_secret ); ?>" class="regular-text" autocomplete="off">
+                    <button type="button" class="button" id="fst_generate_webhook_secret"><?php esc_html_e( 'Generate', 'fishotel-shiptracker' ); ?></button>
+                    <p class="description"><?php esc_html_e( 'Use the same secret here and in the EasyPost dashboard. Click Generate, then Save.', 'fishotel-shiptracker' ); ?></p>
+                </td>
+            </tr>
+            <tr>
+                <th scope="row">
+                    <label for="fst_easypost_test_mode"><?php esc_html_e( 'Test Mode', 'fishotel-shiptracker' ); ?></label>
+                </th>
+                <td>
+                    <input type="checkbox" id="fst_easypost_test_mode" name="fst_easypost_test_mode" value="yes" <?php checked( $ep_test_mode, 'yes' ); ?>>
+                    <p class="description"><?php esc_html_e( 'Use the Test API Key instead of Production.', 'fishotel-shiptracker' ); ?></p>
+                </td>
+            </tr>
+            <tr>
+                <th scope="row">
+                    <label for="fst_easypost_usps_routing"><?php esc_html_e( 'USPS Routing', 'fishotel-shiptracker' ); ?></label>
+                </th>
+                <td>
+                    <select id="fst_easypost_usps_routing" name="fst_easypost_usps_routing">
+                        <option value="auto" <?php selected( $ep_usps_routing, 'auto' ); ?>><?php esc_html_e( 'Auto — use EasyPost if configured (recommended)', 'fishotel-shiptracker' ); ?></option>
+                        <option value="always" <?php selected( $ep_usps_routing, 'always' ); ?>><?php esc_html_e( 'Always — route every USPS shipment through EasyPost', 'fishotel-shiptracker' ); ?></option>
+                        <option value="never" <?php selected( $ep_usps_routing, 'never' ); ?>><?php esc_html_e( 'Never — always poll USPS directly', 'fishotel-shiptracker' ); ?></option>
+                    </select>
+                </td>
+            </tr>
+            <tr>
+                <th scope="row">
+                    <label for="fst_easypost_webhook_url"><?php esc_html_e( 'Webhook URL', 'fishotel-shiptracker' ); ?></label>
+                </th>
+                <td>
+                    <input type="text" id="fst_easypost_webhook_url" value="<?php echo esc_attr( $ep_webhook_url ); ?>" class="regular-text" readonly onclick="this.select();">
+                    <button type="button" class="button" id="fst_copy_webhook_url"><?php esc_html_e( 'Copy', 'fishotel-shiptracker' ); ?></button>
+                    <p class="description"><?php esc_html_e( 'Paste this into the EasyPost dashboard → Webhooks → Add Webhook.', 'fishotel-shiptracker' ); ?></p>
+                </td>
+            </tr>
+            <tr>
+                <th scope="row"></th>
+                <td>
+                    <button type="button" class="button" id="fst_test_easypost"><?php esc_html_e( 'Test EasyPost Connection', 'fishotel-shiptracker' ); ?></button>
                 </td>
             </tr>
         </table>
@@ -534,6 +611,19 @@ class FST_Settings {
         update_option( 'fst_ups_client_secret', sanitize_text_field( $_POST['fst_ups_client_secret'] ?? '' ) );
         update_option( 'fst_usps_client_id', sanitize_text_field( $_POST['fst_usps_client_id'] ?? '' ) );
         update_option( 'fst_usps_client_secret', sanitize_text_field( $_POST['fst_usps_client_secret'] ?? '' ) );
+
+        // EasyPost settings.
+        update_option( 'fst_easypost_production_key', sanitize_text_field( $_POST['fst_easypost_production_key'] ?? '' ) );
+        update_option( 'fst_easypost_test_key', sanitize_text_field( $_POST['fst_easypost_test_key'] ?? '' ) );
+
+        // Treat the webhook secret as opaque — no character stripping, just a length cap.
+        $webhook_secret = isset( $_POST['fst_easypost_webhook_secret'] ) ? (string) wp_unslash( $_POST['fst_easypost_webhook_secret'] ) : '';
+        update_option( 'fst_easypost_webhook_secret', substr( $webhook_secret, 0, 200 ) );
+
+        update_option( 'fst_easypost_test_mode', isset( $_POST['fst_easypost_test_mode'] ) ? 'yes' : 'no' );
+
+        $routing = sanitize_text_field( $_POST['fst_easypost_usps_routing'] ?? 'auto' );
+        update_option( 'fst_easypost_usps_routing', in_array( $routing, array( 'auto', 'always', 'never' ), true ) ? $routing : 'auto' );
     }
 
     /**

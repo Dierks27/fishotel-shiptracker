@@ -12,6 +12,9 @@ class FST_Tracker {
     public function __construct() {
         add_action( 'fst_poll_shipments', array( $this, 'poll_all_shipments' ) );
 
+        // One-shot EasyPost backfill — runs after the main poll on the same hook.
+        add_action( 'fst_poll_shipments', array( $this, 'maybe_run_easypost_backfill' ), 20 );
+
         // Ensure the polling cron is scheduled — recovers if the activation
         // hook failed (e.g. Action Scheduler wasn't loaded yet) or if the
         // scheduled action was lost.
@@ -78,6 +81,11 @@ class FST_Tracker {
      * @return true|WP_Error
      */
     public function poll_shipment( $shipment ) {
+        // EasyPost-tracked shipments are pulled from EasyPost, not the carrier direct.
+        if ( isset( $shipment->tracker_provider ) && 'easypost' === $shipment->tracker_provider ) {
+            return $this->poll_via_easypost( $shipment );
+        }
+
         $this->log( sprintf( 'Polling %s (%s)', $shipment->tracking_number, $shipment->carrier ) );
 
         try {
@@ -101,6 +109,15 @@ class FST_Tracker {
 
             if ( is_wp_error( $result ) ) {
                 $this->log( sprintf( 'Track error: %s', $result->get_error_message() ) );
+
+                // USPS 403 (Access Control) — auto-promote to EasyPost if configured.
+                if ( 'fst_usps_access_denied' === $result->get_error_code() ) {
+                    $promoted = $this->maybe_promote_to_easypost( $shipment );
+                    if ( ! is_wp_error( $promoted ) ) {
+                        return $promoted;
+                    }
+                    $this->log( sprintf( 'EasyPost promotion failed: %s', $promoted->get_error_message() ) );
+                }
 
                 // Still update last_checked so we don't hammer a failing request.
                 FST_Shipment::update( $shipment->id, array(
@@ -176,6 +193,20 @@ class FST_Tracker {
     }
 
     /**
+     * Fire status-change side effects for an externally-driven change.
+     *
+     * Lets EasyPost webhook/poll handlers run the same emails, order
+     * transitions, and hooks that the cron poll fires on a status change.
+     *
+     * @param object $shipment   Shipment row (stdClass).
+     * @param string $old_status
+     * @param string $new_status
+     */
+    public function process_status_change_external( $shipment, $old_status, $new_status ) {
+        $this->process_status_change( $shipment, $old_status, $new_status );
+    }
+
+    /**
      * Process a status change — emails, order status, hooks.
      *
      * @param object $shipment   Shipment row (stdClass).
@@ -228,6 +259,104 @@ class FST_Tracker {
 
         // Fire action hook for extensibility.
         do_action( 'fst_status_changed', $shipment, $old_status, $new_status, $order );
+    }
+
+    /**
+     * Poll a shipment via EasyPost (pull the current tracker state).
+     *
+     * @param object $shipment Shipment row (stdClass).
+     * @return true|WP_Error
+     */
+    private function poll_via_easypost( $shipment ) {
+        $this->log( sprintf( 'Polling %s via EasyPost (tracker %s)', $shipment->tracking_number, $shipment->easypost_tracker_id ) );
+
+        // No tracker id yet — try to create one now.
+        if ( empty( $shipment->easypost_tracker_id ) ) {
+            return $this->maybe_promote_to_easypost( $shipment );
+        }
+
+        $tracker = FST_EasyPost::get_tracker( $shipment->easypost_tracker_id );
+
+        if ( is_wp_error( $tracker ) ) {
+            $this->log( sprintf( 'EasyPost get_tracker error: %s', $tracker->get_error_message() ) );
+
+            // Update last_checked so a failing tracker doesn't starve the queue.
+            FST_Shipment::update( $shipment->id, array(
+                'last_checked' => current_time( 'mysql' ),
+                'check_count'  => $shipment->check_count + 1,
+            ) );
+
+            return $tracker;
+        }
+
+        return FST_EasyPost::apply_tracker_to_shipment( $shipment, $tracker );
+    }
+
+    /**
+     * Promote a shipment to EasyPost: create a tracker, store the id, apply the
+     * initial payload. Used both for USPS 403 auto-promotion and to repair an
+     * EasyPost shipment that has no tracker id yet.
+     *
+     * @param object $shipment Shipment row (stdClass).
+     * @return true|WP_Error
+     */
+    private function maybe_promote_to_easypost( $shipment ) {
+        if ( ! FST_EasyPost::has_credentials() ) {
+            return new WP_Error( 'fst_easypost_not_configured', 'EasyPost is not configured.' );
+        }
+
+        // Respect the USPS routing setting.
+        if ( 'usps' === $shipment->carrier && 'never' === get_option( 'fst_easypost_usps_routing', 'auto' ) ) {
+            return new WP_Error( 'fst_easypost_routing_never', 'EasyPost routing is disabled for USPS.' );
+        }
+
+        $this->log( sprintf( 'Promoting %s to EasyPost', $shipment->tracking_number ) );
+
+        $tracker = FST_EasyPost::create_tracker( $shipment->tracking_number, $shipment->carrier );
+        if ( is_wp_error( $tracker ) ) {
+            $this->log( sprintf( 'EasyPost create_tracker failed: %s', $tracker->get_error_message() ) );
+            return $tracker;
+        }
+
+        $tracker_id = isset( $tracker['id'] ) ? $tracker['id'] : '';
+
+        FST_Shipment::update( $shipment->id, array(
+            'easypost_tracker_id' => $tracker_id,
+            'tracker_provider'    => 'easypost',
+        ) );
+        $shipment->easypost_tracker_id = $tracker_id;
+        $shipment->tracker_provider    = 'easypost';
+
+        return FST_EasyPost::apply_tracker_to_shipment( $shipment, $tracker );
+    }
+
+    /**
+     * Run the one-shot EasyPost backfill if it's pending and EasyPost is configured.
+     *
+     * Hooked to fst_poll_shipments at priority 20 so it runs after the main poll.
+     */
+    public function maybe_run_easypost_backfill() {
+        if ( 'yes' !== get_option( 'fst_easypost_backfill_pending', 'no' ) ) {
+            return;
+        }
+
+        // Leave the flag set until EasyPost is configured, so configuring it
+        // later still triggers the backfill on a subsequent cron run.
+        if ( ! FST_EasyPost::has_credentials() ) {
+            $this->log( 'EasyPost backfill pending, but no credentials configured yet.' );
+            return;
+        }
+
+        $this->log( 'Running one-shot EasyPost backfill' );
+        $result = FST_EasyPost::backfill_active_shipments();
+        $this->log( sprintf(
+            'EasyPost backfill: %d registered, %d skipped, %d errors',
+            $result['registered'],
+            $result['skipped'],
+            $result['errors']
+        ) );
+
+        delete_option( 'fst_easypost_backfill_pending' );
     }
 
     /**
