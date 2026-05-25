@@ -196,6 +196,9 @@ class FST_Order {
         $order_id        = isset( $_POST['order_id'] ) ? absint( $_POST['order_id'] ) : 0;
         $tracking_number = isset( $_POST['tracking_number'] ) ? sanitize_text_field( $_POST['tracking_number'] ) : '';
         $carrier         = isset( $_POST['carrier'] ) ? sanitize_text_field( $_POST['carrier'] ) : 'auto';
+        $line_item_ids   = isset( $_POST['line_item_ids'] )
+            ? array_values( array_unique( array_filter( array_map( 'absint', (array) $_POST['line_item_ids'] ) ) ) )
+            : array();
 
         if ( ! $order_id || empty( $tracking_number ) ) {
             wp_send_json_error( 'Order ID and tracking number are required.' );
@@ -206,29 +209,181 @@ class FST_Order {
             $carrier = FST_Carrier::detect_carrier( $tracking_number );
         }
 
-        // Check for duplicate.
-        $existing = FST_Shipment::get_by_tracking( $tracking_number );
-        if ( $existing ) {
-            wp_send_json_error( 'This tracking number has already been added.' );
+        // Fan out to source orders when this is a fulfillment order.
+        $target_order_ids = $this->resolve_target_order_ids( $order_id );
+        if ( empty( $target_order_ids ) ) {
+            wp_send_json_error( 'Could not resolve target order(s).' );
         }
 
-        // Create the shipment.
-        $shipment_id = FST_Shipment::create( array(
-            'order_id'        => $order_id,
-            'tracking_number' => $tracking_number,
-            'carrier'         => $carrier,
-            'status'          => 'unknown',
-            'ship_date'       => current_time( 'mysql' ),
+        $shipment_ids = array();
+        $failures     = array();
+
+        foreach ( $target_order_ids as $target_id ) {
+            // Skip if this exact tracking# is already on this order (allows duplicates
+            // across DIFFERENT source orders for combined-box shipments).
+            if ( FST_Shipment::get_by_order_and_tracking( $target_id, $tracking_number ) ) {
+                continue;
+            }
+
+            // Filter line_item_ids down to those that actually belong to this source order.
+            $items_for_this_order = array();
+            if ( ! empty( $line_item_ids ) ) {
+                $source_order = wc_get_order( $target_id );
+                if ( $source_order ) {
+                    $source_item_ids      = array_keys( $source_order->get_items() );
+                    $items_for_this_order = array_values( array_intersect( $line_item_ids, $source_item_ids ) );
+                }
+            }
+
+            $shipment_id = FST_Shipment::create( array(
+                'order_id'        => $target_id,
+                'tracking_number' => $tracking_number,
+                'carrier'         => $carrier,
+                'status'          => 'unknown',
+                'ship_date'       => current_time( 'mysql' ),
+                'line_item_ids'   => ! empty( $items_for_this_order ) ? wp_json_encode( $items_for_this_order ) : null,
+            ) );
+
+            if ( ! $shipment_id ) {
+                $failures[] = $target_id;
+                continue;
+            }
+
+            $shipment_ids[] = $shipment_id;
+
+            // Add order note + transition source order. Only flip to "Shipped" once
+            // every line item on that order is covered by a shipment — partial
+            // fulfillments stay in Processing and just get a note.
+            $source_order = wc_get_order( $target_id );
+            if ( $source_order ) {
+                $source_order->add_order_note(
+                    sprintf( 'Shipment tracking added: %s via %s', $tracking_number, strtoupper( $carrier ) ),
+                    false
+                );
+
+                if ( 'processing' === $source_order->get_status() ) {
+                    if ( $this->is_order_fully_shipped( $source_order ) ) {
+                        $source_order->set_status( 'shipped', 'ShipTracker: all items now have tracking.' );
+                        $source_order->save();
+                    } else {
+                        $source_order->add_order_note(
+                            sprintf(
+                                'Partial shipment added: %s (%s) — some items still pending',
+                                $tracking_number,
+                                strtoupper( $carrier )
+                            ),
+                            false
+                        );
+                    }
+                }
+            }
+        }
+
+        if ( empty( $shipment_ids ) ) {
+            wp_send_json_error( empty( $failures )
+                ? 'This tracking number is already on this order.'
+                : 'Failed to save tracking data.' );
+        }
+
+        // Register / poll each newly created shipment.
+        foreach ( $shipment_ids as $sid ) {
+            $this->poll_or_register_shipment( $sid, $carrier, $tracking_number );
+        }
+
+        wp_send_json_success( array(
+            'message'      => count( $shipment_ids ) > 1
+                ? sprintf( 'Tracking added to %d source orders.', count( $shipment_ids ) )
+                : 'Tracking added successfully!',
+            'shipment_id'  => $shipment_ids[0],
+            'shipment_ids' => $shipment_ids,
+            'carrier'      => $carrier,
         ) );
+    }
 
-        if ( ! $shipment_id ) {
-            wp_send_json_error( 'Failed to save tracking data.' );
+    /**
+     * Resolve the target order IDs that should receive shipment rows when
+     * tracking is added against $order_id.
+     *
+     * For a fulfillment order (a combined-box meta order owned by the Phase 2.5
+     * fulfillment workflow), fan out to the source order IDs stored in
+     * `_fishotel_fulfillment_sources`. For everything else, return the original
+     * order id unchanged.
+     *
+     * @param int $order_id
+     * @return int[] Ordered list of target order IDs (deduped, may be 1+ entries).
+     */
+    private function resolve_target_order_ids( $order_id ) {
+        $order = wc_get_order( $order_id );
+        if ( ! $order ) {
+            return array();
         }
 
-        // Route USPS through EasyPost when configured. If EasyPost fails
-        // (network, bad key, etc.), fall through to the direct-poll path so we
-        // degrade gracefully.
+        // Kill switches — fall back to legacy single-shipment behavior.
+        $kill_constant = defined( 'FST_FULFILLMENT_FANOUT_OFF' ) && FST_FULFILLMENT_FANOUT_OFF;
+        $kill_option   = '0' === (string) get_option( 'fst_fulfillment_fanout_enabled', '1' );
+        if ( $kill_constant || $kill_option ) {
+            return array( (int) $order_id );
+        }
+
+        if ( 'fulfillment' === $order->get_status() ) {
+            $source_ids = $order->get_meta( '_fishotel_fulfillment_sources' );
+            if ( is_array( $source_ids ) && ! empty( $source_ids ) ) {
+                return array_values( array_unique( array_filter( array_map( 'absint', $source_ids ) ) ) );
+            }
+        }
+
+        return array( (int) $order_id );
+    }
+
+    /**
+     * Whether every line item on $order is covered by at least one shipment.
+     *
+     * A shipment with NULL line_item_ids is treated as covering ALL items of
+     * its order (the pre-1.9 semantic — preserves backwards compatibility for
+     * rows created before the column existed).
+     *
+     * @param WC_Order $order
+     * @return bool
+     */
+    private function is_order_fully_shipped( $order ) {
+        $order_item_ids = array_keys( $order->get_items() );
+        if ( empty( $order_item_ids ) ) {
+            return true;
+        }
+
+        $shipments   = FST_Shipment::get_by_order( $order->get_id() );
+        $covered_ids = array();
+
+        foreach ( $shipments as $s ) {
+            if ( empty( $s->line_item_ids ) ) {
+                // NULL/empty line_item_ids — shipment covers everything on this order.
+                return true;
+            }
+            $ids = json_decode( $s->line_item_ids, true );
+            if ( is_array( $ids ) ) {
+                $covered_ids = array_merge( $covered_ids, array_map( 'absint', $ids ) );
+            }
+        }
+
+        $covered_ids = array_unique( $covered_ids );
+        $uncovered   = array_diff( $order_item_ids, $covered_ids );
+
+        return empty( $uncovered );
+    }
+
+    /**
+     * Register a freshly created shipment with EasyPost (when applicable),
+     * otherwise poll the carrier API directly. Encapsulates the
+     * EasyPost-or-direct branch so it can be reused per shipment in the
+     * fan-out loop.
+     *
+     * @param int    $shipment_id
+     * @param string $carrier
+     * @param string $tracking_number
+     */
+    private function poll_or_register_shipment( $shipment_id, $carrier, $tracking_number ) {
         $routed_via_easypost = false;
+
         if ( $this->should_route_via_easypost( $carrier ) ) {
             $ep_tracker = FST_EasyPost::create_tracker( $tracking_number, $carrier );
             if ( ! is_wp_error( $ep_tracker ) ) {
@@ -241,7 +396,6 @@ class FST_Order {
             }
         }
 
-        // Immediately poll for status via the direct carrier API (unless EasyPost handled it).
         if ( ! $routed_via_easypost ) {
             $carrier_instance = $this->get_carrier_instance( $carrier );
             if ( $carrier_instance && $carrier_instance->has_credentials() ) {
@@ -249,28 +403,6 @@ class FST_Order {
                 $tracker->poll_shipment( FST_Shipment::get( $shipment_id ) );
             }
         }
-
-        // Add order note and move out of Processing.
-        $order = wc_get_order( $order_id );
-        if ( $order ) {
-            $order->add_order_note(
-                sprintf( 'Shipment tracking added: %s via %s', $tracking_number, strtoupper( $carrier ) ),
-                false // Not customer-facing note.
-            );
-
-            // Move order to "Shipped" so it's no longer mixed in with
-            // orders that haven't shipped yet.
-            if ( 'processing' === $order->get_status() ) {
-                $order->set_status( 'shipped', 'ShipTracker: tracking number added.' );
-                $order->save();
-            }
-        }
-
-        wp_send_json_success( array(
-            'message'     => 'Tracking added successfully!',
-            'shipment_id' => $shipment_id,
-            'carrier'     => $carrier,
-        ) );
     }
 
     /**
@@ -347,22 +479,27 @@ class FST_Order {
             $carrier = FST_Carrier::detect_carrier( $tracking_number );
         }
 
-        // Avoid duplicates.
-        if ( FST_Shipment::get_by_tracking( $tracking_number ) ) {
-            return;
-        }
+        $target_order_ids = $this->resolve_target_order_ids( $order_id );
 
-        FST_Shipment::create( array(
-            'order_id'        => $order_id,
-            'tracking_number' => $tracking_number,
-            'carrier'         => $carrier,
-        ) );
+        foreach ( $target_order_ids as $target_id ) {
+            // Avoid duplicates on the same order — duplicates ACROSS source
+            // orders are allowed (combined-box scenario).
+            if ( FST_Shipment::get_by_order_and_tracking( $target_id, $tracking_number ) ) {
+                continue;
+            }
 
-        // Move order to "Shipped" when tracking is added.
-        $order = wc_get_order( $order_id );
-        if ( $order && 'processing' === $order->get_status() ) {
-            $order->set_status( 'shipped', 'ShipTracker: tracking number added.' );
-            $order->save();
+            FST_Shipment::create( array(
+                'order_id'        => $target_id,
+                'tracking_number' => $tracking_number,
+                'carrier'         => $carrier,
+            ) );
+
+            $source_order = wc_get_order( $target_id );
+            if ( $source_order && 'processing' === $source_order->get_status()
+                 && $this->is_order_fully_shipped( $source_order ) ) {
+                $source_order->set_status( 'shipped', 'ShipTracker: all items now have tracking.' );
+                $source_order->save();
+            }
         }
     }
 

@@ -179,15 +179,22 @@ class FST_Email {
     /**
      * Render the order summary widget for email.
      *
-     * @param WC_Order $order
+     * @param WC_Order              $order
+     * @param WC_Order_Item[]|null  $items Optional pre-filtered subset of line items
+     *                                     to render (for partial-shipment emails that
+     *                                     should only list the items in that box).
+     *                                     NULL means render every item on the order.
      * @return string HTML for the order summary.
      */
-    public static function render_order_summary( $order ) {
+    public static function render_order_summary( $order, $items = null ) {
         if ( ! $order ) {
             return '';
         }
 
-        $items = $order->get_items();
+        if ( null === $items ) {
+            $items = $order->get_items();
+        }
+
         if ( empty( $items ) ) {
             return '';
         }

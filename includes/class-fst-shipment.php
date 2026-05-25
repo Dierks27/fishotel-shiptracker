@@ -65,6 +65,26 @@ class FST_Shipment {
     }
 
     /**
+     * Get the shipment row for a specific order + tracking number combo.
+     *
+     * Used to detect a duplicate within the same order — the fan-out flow
+     * intentionally allows the same tracking number across DIFFERENT source
+     * orders (combined-box scenario).
+     *
+     * @param int    $order_id
+     * @param string $tracking_number
+     * @return object|null
+     */
+    public static function get_by_order_and_tracking( $order_id, $tracking_number ) {
+        global $wpdb;
+        return $wpdb->get_row( $wpdb->prepare(
+            "SELECT * FROM " . self::table() . " WHERE order_id = %d AND tracking_number = %s LIMIT 1",
+            $order_id,
+            $tracking_number
+        ) );
+    }
+
+    /**
      * Get a shipment by its EasyPost tracker ID.
      *
      * @param string $tracker_id
@@ -129,6 +149,7 @@ class FST_Shipment {
             'ship_date'           => current_time( 'mysql' ),
             'easypost_tracker_id' => '',
             'tracker_provider'    => '',
+            'line_item_ids'       => null,
             'check_count'         => 0,
             'created_at'          => current_time( 'mysql' ),
             'updated_at'          => current_time( 'mysql' ),
@@ -137,7 +158,7 @@ class FST_Shipment {
         $data = wp_parse_args( $data, $defaults );
 
         $result = $wpdb->insert( self::table(), $data, array(
-            '%d', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%d', '%s', '%s',
+            '%d', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%d', '%s', '%s',
         ) );
 
         if ( false === $result ) {

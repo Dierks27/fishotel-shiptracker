@@ -1,6 +1,6 @@
 # FisHotel ShipTracker - Project Overview & Instruction Manual
 
-**Version:** 1.8.0
+**Version:** 1.9.0
 **Author:** FisHotel
 **Type:** WordPress / WooCommerce Plugin (Proprietary)
 **Repository:** Dierks27/fishotel-shiptracker
@@ -129,6 +129,21 @@ Import tracking data from Advanced Shipment Tracking (AST) or TrackShip plugins:
 4. Click **Add Tracking**
 5. The plugin will immediately poll the carrier API for the first status
 
+### Fulfillment Order Fan-Out
+When tracking is added to a Fulfillment order (a combined-box meta order with status `wc-fulfillment` owned by the Phase 2.5 fulfillment workflow), ShipTracker fans the tracking number out to every source order listed in the `_fishotel_fulfillment_sources` meta. This creates one `wp_fst_shipments` row per source order, all sharing the same tracking number — which is how customers on the source orders actually receive shipment emails (the fulfillment order itself is `customer = Guest`).
+
+The optional POST field `line_item_ids[]` (sent alongside the tracking number) marks the shipment as a **partial fulfillment**: only those `WC_Order_Item` IDs are considered "in this box". Each created shipment row stores only the line item IDs that belong to its own source order (the input list is intersected with that order's items). A shipment with `line_item_ids = NULL` (the default and the pre-1.9 shape for existing rows) is treated as covering ALL items of its `order_id`.
+
+Source-order status transitions are derived from coverage:
+- **Add tracking** → source order flips to `wc-shipped` only when *every* line item is covered by a shipment. Partial fulfillments stay in `wc-processing` and get an order note.
+- **All shipments delivered** → source order auto-completes only when *every* line item is covered by a shipment with `status = 'delivered'`. Partial deliveries get a note instead.
+
+The same tracking number is allowed across DIFFERENT source orders (combined-box scenario). It is still rejected if it already exists on the same `order_id`.
+
+Kill switches (both default to ON):
+- Define `FST_FULFILLMENT_FANOUT_OFF` constant in wp-config.php to bypass fan-out — tracking lands on the fulfillment order_id directly.
+- Set the `fst_fulfillment_fanout_enabled` option to `'0'` for the same effect via the database.
+
 ### Monitoring Shipments
 - **Dashboard Widget** (wp-admin home) - Shows active shipment counts, exceptions, late alerts, and recently delivered orders at a glance
 - **ShipTracker > Shipments** - Full list with clickable status cards to filter by In Transit, Out for Delivery, Exception, etc. Default sort is by Ship Date (newest first)
@@ -199,8 +214,10 @@ The plugin creates two custom tables:
 - ship_date, est_delivery, delivered_date
 - last_checked, last_event_at, tracking_data, check_count
 - easypost_tracker_id, tracker_provider (EasyPost integration; DB version 1.1.0)
+- line_item_ids (DB version 1.2.0; JSON array of WC_Order_Item IDs in this shipment, NULL = covers all items of order_id)
 - created_at, updated_at
 - Indexes on: order_id, tracking_number, status, carrier, last_checked, easypost_tracker_id, tracker_provider
+- Note: `tracking_number` is no longer globally unique — duplicates are allowed across DIFFERENT `order_id` values (combined-box fan-out). The same tracking_number+order_id pair is still rejected.
 
 **`wp_fst_tracking_events`** - Individual tracking events per shipment
 - id, shipment_id, status, description, location, event_time, raw_data, created_at

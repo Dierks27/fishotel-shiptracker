@@ -82,6 +82,7 @@ class FST_Activator {
             last_checked datetime DEFAULT NULL,
             last_event_at datetime DEFAULT NULL,
             tracking_data longtext,
+            line_item_ids longtext,
             easypost_tracker_id varchar(64) NOT NULL DEFAULT '',
             tracker_provider varchar(20) NOT NULL DEFAULT '',
             check_count int(11) NOT NULL DEFAULT 0,
