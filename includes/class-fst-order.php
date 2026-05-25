@@ -326,9 +326,18 @@ class FST_Order {
         }
 
         if ( 'fulfillment' === $order->get_status() ) {
-            $source_ids = $order->get_meta( '_fishotel_fulfillment_sources' );
-            if ( is_array( $source_ids ) && ! empty( $source_ids ) ) {
-                return array_values( array_unique( array_filter( array_map( 'absint', $source_ids ) ) ) );
+            $raw_sources = $order->get_meta( '_fishotel_fulfillment_sources' );
+
+            // The FisHotel theme stores this meta as a comma-separated string
+            // (e.g. "34168,34159"), not an array. Normalize string → array
+            // first, then handle the array case uniformly. Defensive against
+            // a future format change to a real array.
+            if ( is_string( $raw_sources ) && '' !== trim( $raw_sources ) ) {
+                $raw_sources = array_map( 'trim', explode( ',', $raw_sources ) );
+            }
+
+            if ( is_array( $raw_sources ) && ! empty( $raw_sources ) ) {
+                return array_values( array_unique( array_filter( array_map( 'absint', $raw_sources ) ) ) );
             }
         }
 

@@ -2,6 +2,10 @@
 
 All notable changes to FisHotel ShipTracker will be documented in this file.
 
+## [1.9.1]
+
+- Hotfix: fan-out now parses the comma-separated string format the FisHotel theme actually uses for `_fishotel_fulfillment_sources` ("34168,34159"). v1.9.0 only checked `is_array()`, so fan-out silently fell through to the legacy single-shipment path on real fulfillment orders. Array format is still accepted for forward compatibility.
+
 ## [1.9.0]
 
 - Added multi-source shipment fan-out: when a tracking number is added to a Fulfillment order (status `wc-fulfillment`), it now creates one shipment row per source order listed in `_fishotel_fulfillment_sources` instead of a single row against the (Guest) fulfillment order, so customer emails actually reach Ken
