@@ -247,7 +247,25 @@ class FST_Tracker {
             $target_status = $actions['order_status'];
             $current       = $order->get_status();
 
-            if ( $target_status !== $current ) {
+            // Guard: only auto-complete the source order once EVERY line item is
+            // covered by a delivered shipment. Otherwise a partial fan-out (one
+            // box delivered, another still in transit) would prematurely flip
+            // the order to Completed.
+            $should_complete = 'completed' !== $target_status
+                || 'delivered' !== $new_status
+                || $this->is_order_fully_delivered( $order );
+
+            if ( ! $should_complete ) {
+                $order->add_order_note(
+                    sprintf(
+                        'Partial delivery: tracking %s delivered, other shipments still pending. Order kept in %s.',
+                        $shipment->tracking_number,
+                        $current
+                    ),
+                    false
+                );
+                $this->log( sprintf( 'Order %d: skipped auto-complete (partial delivery)', $shipment->order_id ) );
+            } elseif ( $target_status !== $current ) {
                 $order->set_status( $target_status, sprintf( 'ShipTracker: shipment %s', FST_Carrier::get_status_label( $new_status ) ) );
                 $order->save();
                 $this->log( sprintf( 'Order %d status changed to %s', $shipment->order_id, $target_status ) );
@@ -370,7 +388,8 @@ class FST_Tracker {
      */
     private function send_email( $shipment, $order, $status, $to, $is_admin = false ) {
         $replacements = $this->build_replacements( $shipment, $order );
-        $rendered     = self::render_status_email( $status, $replacements, $is_admin );
+        $is_partial   = ! empty( $shipment->line_item_ids );
+        $rendered     = self::render_status_email( $status, $replacements, $is_admin, $is_partial );
 
         if ( ! $rendered ) {
             $this->log( sprintf( 'No email template for status: %s', $status ) );
@@ -383,6 +402,44 @@ class FST_Tracker {
     }
 
     /**
+     * Whether every line item on $order is in a shipment with status 'delivered'.
+     *
+     * Mirrors FST_Order::is_order_fully_shipped(). A shipment with NULL/empty
+     * line_item_ids is treated as covering ALL items on its order.
+     *
+     * @param WC_Order $order
+     * @return bool
+     */
+    private function is_order_fully_delivered( $order ) {
+        $order_item_ids = array_keys( $order->get_items() );
+        if ( empty( $order_item_ids ) ) {
+            return true;
+        }
+
+        $shipments     = FST_Shipment::get_by_order( $order->get_id() );
+        $delivered_ids = array();
+
+        foreach ( $shipments as $s ) {
+            if ( 'delivered' !== $s->status ) {
+                continue;
+            }
+            if ( empty( $s->line_item_ids ) ) {
+                // Delivered shipment with no item scope = covers everything.
+                return true;
+            }
+            $ids = json_decode( $s->line_item_ids, true );
+            if ( is_array( $ids ) ) {
+                $delivered_ids = array_merge( $delivered_ids, array_map( 'absint', $ids ) );
+            }
+        }
+
+        $delivered_ids = array_unique( $delivered_ids );
+        $undelivered   = array_diff( $order_item_ids, $delivered_ids );
+
+        return empty( $undelivered );
+    }
+
+    /**
      * Render a status email using the saved (or default) template.
      *
      * Shared by both the real status-change email path and the
@@ -392,9 +449,14 @@ class FST_Tracker {
      * @param string $status        Shipment status slug.
      * @param array  $replacements  Map of shortcode => value.
      * @param bool   $is_admin      Whether this is an admin-recipient email.
+     * @param bool   $is_partial    Whether this shipment covers only a subset
+     *                              of the order's items (partial fulfillment).
+     *                              Rewrites "Your order" → "Items from your order"
+     *                              in the subject so customers know to expect
+     *                              additional boxes.
      * @return array|null { subject, html_body } or null if no template exists.
      */
-    public static function render_status_email( $status, array $replacements, $is_admin = false ) {
+    public static function render_status_email( $status, array $replacements, $is_admin = false, $is_partial = false ) {
         $templates = get_option( 'fst_email_templates', array() );
         $template  = isset( $templates[ $status ] ) ? $templates[ $status ] : null;
 
@@ -411,6 +473,10 @@ class FST_Tracker {
         $subject = str_replace( array_keys( $replacements ), array_values( $replacements ), $template['subject'] );
         $body    = str_replace( array_keys( $replacements ), array_values( $replacements ), $template['body'] );
 
+        if ( $is_partial ) {
+            $subject = self::partialize_subject( $subject );
+        }
+
         if ( $is_admin ) {
             $subject = '[Admin] ' . $subject;
         }
@@ -419,6 +485,35 @@ class FST_Tracker {
             'subject'   => $subject,
             'html_body' => FST_Email::wrap( nl2br( $body ), $status ),
         );
+    }
+
+    /**
+     * Rewrite a subject line to use partial-shipment language.
+     *
+     * Heuristic: "Your order #X has shipped!" → "Items from your order #X have shipped".
+     * If the template doesn't contain the phrase "your order", we prefix a tag
+     * instead so the partial-vs-full distinction is never lost.
+     *
+     * @param string $subject
+     * @return string
+     */
+    private static function partialize_subject( $subject ) {
+        if ( preg_match( '/\byour order\b/i', $subject ) ) {
+            $rewritten = preg_replace_callback(
+                '/\b(your order)\b/i',
+                static function ( $m ) {
+                    // Match the case of the captured "Your" / "your".
+                    return ctype_upper( $m[1][0] ) ? 'Items from your order' : 'items from your order';
+                },
+                $subject,
+                1
+            );
+            // Singular verbs → plural ("has" → "have", "is" → "are").
+            $rewritten = preg_replace( '/\bhas\b/', 'have', $rewritten );
+            $rewritten = preg_replace( '/\bis\b/', 'are', $rewritten );
+            return $rewritten;
+        }
+        return '[Partial shipment] ' . $subject;
     }
 
     /**
@@ -520,6 +615,23 @@ class FST_Tracker {
         $carrier_url = $carrier ? $carrier->get_tracking_url( $shipment->tracking_number ) : '';
         $accent      = FST_Carrier::get_status_color( $shipment->status );
 
+        // When a shipment is scoped to a subset of the order (partial fulfillment),
+        // the {order_summary} block should only list the items that are actually
+        // in this box.
+        $items_to_show = null;
+        if ( ! empty( $shipment->line_item_ids ) ) {
+            $included_ids = json_decode( $shipment->line_item_ids, true );
+            if ( is_array( $included_ids ) && ! empty( $included_ids ) ) {
+                $included_ids  = array_map( 'absint', $included_ids );
+                $items_to_show = array_filter(
+                    $order->get_items(),
+                    static function ( $item ) use ( $included_ids ) {
+                        return in_array( $item->get_id(), $included_ids, true );
+                    }
+                );
+            }
+        }
+
         return array(
             '{tracking_number}'      => $shipment->tracking_number,
             '{carrier}'              => strtoupper( $shipment->carrier ),
@@ -534,7 +646,7 @@ class FST_Tracker {
             '{tracking_progress}'    => FST_Email::render_progress_bar( $shipment->status ),
             '{tracking_timeline}'    => FST_Email::render_progress_bar( $shipment->status ),
             '{tracking_events}'      => FST_Email::render_events( $shipment->id ),
-            '{order_summary}'        => FST_Email::render_order_summary( $order ),
+            '{order_summary}'        => FST_Email::render_order_summary( $order, $items_to_show ),
             '{track_button}'         => FST_Email::render_track_button( $carrier_url ?: '', 'Track Your Package', $accent ),
         );
     }

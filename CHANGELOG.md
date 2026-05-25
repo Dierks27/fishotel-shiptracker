@@ -2,6 +2,17 @@
 
 All notable changes to FisHotel ShipTracker will be documented in this file.
 
+## [1.9.0]
+
+- Added multi-source shipment fan-out: when a tracking number is added to a Fulfillment order (status `wc-fulfillment`), it now creates one shipment row per source order listed in `_fishotel_fulfillment_sources` instead of a single row against the (Guest) fulfillment order, so customer emails actually reach Ken
+- Added `line_item_ids` column on `wp_fst_shipments` (DB version 1.2.0) for partial-fulfillment tracking; NULL preserves the pre-1.9 "covers everything" semantic for existing rows
+- Customer emails for partial shipments now list only the items in that box and rewrite the subject from "Your order #X has shipped" → "Items from your order #X have shipped"
+- Source orders only flip to "Shipped" once every line item is covered by a shipment (partial fulfillments stay in Processing with a note)
+- Source orders only auto-complete on Delivered once every line item is covered by a Delivered shipment
+- Duplicate tracking numbers are now allowed across DIFFERENT source orders (combined-box scenario); same tracking# on the same order is still rejected
+- New `get_by_order_and_tracking()` shipment lookup
+- Kill switches: define `FST_FULFILLMENT_FANOUT_OFF` in wp-config.php, or set `fst_fulfillment_fanout_enabled = '0'`, to restore the pre-1.9 single-shipment behavior
+
 ## [1.8.0]
 
 - Added EasyPost integration to track USPS packages regardless of the Mailer ID in the barcode (works around the April 2026 USPS Access Control change that returns HTTP 403 for dropshipper-printed labels)
