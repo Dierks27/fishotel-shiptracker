@@ -572,32 +572,23 @@ class FST_Order {
     }
 
     /**
-     * Output ship date for orders list column.
+     * Output the customer-requested delivery date for the orders list column.
      *
-     * Shows the shipment ship_date if tracking exists, otherwise falls back
-     * to the requested shipping date stored as order meta by checkout plugins.
+     * Always shows the date the customer selected at checkout, regardless of
+     * whether tracking has been added — the column's job is forward planning
+     * ("what needs to go out tomorrow?"), not a history of when each box left.
+     * The actual ship date(s) for an order are visible inside that order's
+     * Shipment Tracking meta box on the edit page.
      */
     private function output_ship_date_column( $order_id ) {
-        $shipments = FST_Shipment::get_by_order( $order_id );
-
-        // If shipments exist, show the shipment ship dates.
-        if ( ! empty( $shipments ) ) {
-            foreach ( $shipments as $shipment ) {
-                if ( ! empty( $shipment->ship_date ) ) {
-                    echo '<span style="display:block;font-size:12px;white-space:nowrap;">';
-                    echo esc_html( date_i18n( get_option( 'date_format' ), strtotime( $shipment->ship_date ) ) );
-                    echo '</span>';
-                } else {
-                    echo '<span style="color:#999;">&mdash;</span>';
-                }
-            }
+        $order = wc_get_order( $order_id );
+        if ( ! $order ) {
+            echo '<span style="color:#999;">&mdash;</span>';
             return;
         }
 
-        // No shipments — check for a requested shipping date in order meta.
-        // Skip for refunded orders — no need to show a ship date.
-        $order = wc_get_order( $order_id );
-        if ( $order && 'refunded' === $order->get_status() ) {
+        // Don't show a date for refunded orders.
+        if ( 'refunded' === $order->get_status() ) {
             echo '<span style="color:#999;">&mdash;</span>';
             return;
         }
