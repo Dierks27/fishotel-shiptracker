@@ -64,8 +64,8 @@ class FST_Order {
      * @param WP_Post|WC_Order $post_or_order
      */
     public function render_meta_box( $post_or_order ) {
-        $order_id = $post_or_order instanceof WC_Order ? $post_or_order->get_id() : $post_or_order->ID;
-        $shipments = FST_Shipment::get_by_order( $order_id );
+        $order_id  = $post_or_order instanceof WC_Order ? $post_or_order->get_id() : $post_or_order->ID;
+        $shipments = $this->get_effective_shipments( $order_id );
 
         wp_nonce_field( 'fst_tracking_nonce', 'fst_tracking_nonce_field' );
         ?>
@@ -381,6 +381,80 @@ class FST_Order {
     }
 
     /**
+     * Get the shipments to display for an order.
+     *
+     * For a fulfillment order with no direct shipments, fans IN from the
+     * source orders listed in `_fishotel_fulfillment_sources` and dedupes by
+     * tracking number — the v1.9 fan-out creates one shipment row per source
+     * sharing the same number, but the fulfillment row itself stays empty, so
+     * a plain `get_by_order()` returns nothing. This is the inverse view of
+     * the write-side fan-out: shipments belong to source orders, but the
+     * fulfillment's UI surfaces (orders-list column, meta box) need to see
+     * them.
+     *
+     * Display-only — write paths still use `FST_Shipment::get_by_order()`
+     * directly so they only act on rows actually owned by that order.
+     *
+     * Kill switch: `define( 'FST_FULFILLMENT_DISPLAY_AGGREGATION_OFF', true )`
+     * disables the fan-in and falls back to direct lookup.
+     *
+     * @param int $order_id
+     * @return array Shipment rows (stdClass) to display.
+     */
+    private function get_effective_shipments( $order_id ) {
+        $shipments = FST_Shipment::get_by_order( $order_id );
+
+        // Direct shipments win — short-circuit. Also short-circuits the kill
+        // switch case implicitly: with the constant set, this stays at "direct
+        // lookup only" since we never reach the fan-in below.
+        if ( ! empty( $shipments ) ) {
+            return $shipments;
+        }
+
+        if ( defined( 'FST_FULFILLMENT_DISPLAY_AGGREGATION_OFF' ) && FST_FULFILLMENT_DISPLAY_AGGREGATION_OFF ) {
+            return array();
+        }
+
+        $order = wc_get_order( $order_id );
+        if ( ! $order || 'fulfillment' !== $order->get_status() ) {
+            return array();
+        }
+
+        $raw_sources = $order->get_meta( '_fishotel_fulfillment_sources' );
+        if ( empty( $raw_sources ) ) {
+            return array();
+        }
+
+        // Normalize: theme stores as comma-separated string "34168,34159".
+        // Accept array too for forward compatibility.
+        if ( is_string( $raw_sources ) ) {
+            $source_ids = array_map( 'trim', explode( ',', $raw_sources ) );
+        } elseif ( is_array( $raw_sources ) ) {
+            $source_ids = $raw_sources;
+        } else {
+            return array();
+        }
+
+        $source_ids = array_values( array_unique( array_filter( array_map( 'absint', $source_ids ) ) ) );
+
+        $seen   = array();
+        $unique = array();
+        foreach ( $source_ids as $sid ) {
+            foreach ( FST_Shipment::get_by_order( $sid ) as $sh ) {
+                // Dedupe by tracking number — fan-out creates one row per source
+                // sharing the same number; show one badge per physical shipment.
+                if ( in_array( $sh->tracking_number, $seen, true ) ) {
+                    continue;
+                }
+                $seen[]   = $sh->tracking_number;
+                $unique[] = $sh;
+            }
+        }
+
+        return $unique;
+    }
+
+    /**
      * Register a freshly created shipment with EasyPost (when applicable),
      * otherwise poll the carrier API directly. Encapsulates the
      * EasyPost-or-direct branch so it can be reused per shipment in the
@@ -555,7 +629,7 @@ class FST_Order {
      * Output tracking status for orders list column.
      */
     private function output_tracking_column( $order_id ) {
-        $shipments = FST_Shipment::get_by_order( $order_id );
+        $shipments = $this->get_effective_shipments( $order_id );
 
         if ( empty( $shipments ) ) {
             echo '<span class="fst-no-tracking">&mdash;</span>';

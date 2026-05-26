@@ -2,6 +2,11 @@
 
 All notable changes to FisHotel ShipTracker will be documented in this file.
 
+## [1.9.3]
+
+- Display fix: the Tracking column on the WooCommerce Orders list and the Shipment Tracking meta box on fulfillment edit pages now fan IN from `_fishotel_fulfillment_sources` when the fulfillment itself has no direct shipments (the inverse view of the v1.9.0 write-side fan-out). Previously a fulfillment with shipped sources rendered as "—" / "no tracking" because the rows are keyed to source order IDs. Shipments are deduped by tracking number so one badge renders per physical box. Write paths (create/remove/poll) still use direct lookups and only touch rows actually owned by their order.
+- Kill switch: define `FST_FULFILLMENT_DISPLAY_AGGREGATION_OFF` to disable the fan-in and fall back to direct lookup.
+
 ## [1.9.2]
 
 - "Delivery Date" column on the WooCommerce Orders list always shows the customer-requested delivery date from `_fishotel_shipping_date` now, even when tracking has been added. The pre-1.9.2 behavior switched to the shipment's `ship_date` once tracking was attached, which broke the column's purpose (planning upcoming shipments). Per-shipment ship dates are still visible inside the order's Shipment Tracking meta box.
