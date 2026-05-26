@@ -384,13 +384,18 @@ class FST_Order {
      * Get the shipments to display for an order.
      *
      * For a fulfillment order with no direct shipments, fans IN from the
-     * source orders listed in `_fishotel_fulfillment_sources` and dedupes by
-     * tracking number — the v1.9 fan-out creates one shipment row per source
-     * sharing the same number, but the fulfillment row itself stays empty, so
-     * a plain `get_by_order()` returns nothing. This is the inverse view of
+     * source orders linked to this fulfillment and dedupes by tracking
+     * number — the v1.9 fan-out creates one shipment row per source sharing
+     * the same number, but the fulfillment row itself stays empty, so a
+     * plain `get_by_order()` returns nothing. This is the inverse view of
      * the write-side fan-out: shipments belong to source orders, but the
      * fulfillment's UI surfaces (orders-list column, meta box) need to see
      * them.
+     *
+     * Sources are discovered via an inverse `wc_get_orders` query against
+     * `_fishotel_fulfilled_by_order` (set on each SOURCE — per the theme,
+     * the single source of truth for the link). The `_fishotel_fulfillment_sources`
+     * cache on the fulfillment itself can be empty or stale on real data.
      *
      * Display-only — write paths still use `FST_Shipment::get_by_order()`
      * directly so they only act on rows actually owned by that order.
@@ -420,22 +425,23 @@ class FST_Order {
             return array();
         }
 
-        $raw_sources = $order->get_meta( '_fishotel_fulfillment_sources' );
-        if ( empty( $raw_sources ) ) {
+        // Find every source order that points back to this fulfillment.
+        // _fishotel_fulfilled_by_order lives on the SOURCE — the theme's
+        // documented single source of truth for the link.
+        $source_ids = wc_get_orders( array(
+            'meta_key'   => '_fishotel_fulfilled_by_order',
+            'meta_value' => $order_id,
+            'limit'      => -1,
+            'return'     => 'ids',
+            // Include every status (custom + core) so a shipped/completed
+            // source still surfaces. wc_get_orders defaults filter to the
+            // core "shop" statuses, which would hide e.g. wc-shipped.
+            'status'     => array_keys( wc_get_order_statuses() ),
+        ) );
+
+        if ( empty( $source_ids ) ) {
             return array();
         }
-
-        // Normalize: theme stores as comma-separated string "34168,34159".
-        // Accept array too for forward compatibility.
-        if ( is_string( $raw_sources ) ) {
-            $source_ids = array_map( 'trim', explode( ',', $raw_sources ) );
-        } elseif ( is_array( $raw_sources ) ) {
-            $source_ids = $raw_sources;
-        } else {
-            return array();
-        }
-
-        $source_ids = array_values( array_unique( array_filter( array_map( 'absint', $source_ids ) ) ) );
 
         $seen   = array();
         $unique = array();
