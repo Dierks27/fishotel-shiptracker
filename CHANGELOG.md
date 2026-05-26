@@ -2,6 +2,10 @@
 
 All notable changes to FisHotel ShipTracker will be documented in this file.
 
+## [1.9.4]
+
+- Hotfix: fulfillment display fan-in now uses an inverse `wc_get_orders()` query against `_fishotel_fulfilled_by_order` (set on each SOURCE order — per the theme, the single source of truth for the link) instead of reading `_fishotel_fulfillment_sources` from the fulfillment. The cache meta on the fulfillment can be empty or stale on real data, which left FF-34197 / FF-34202 rendering "—" in the Tracking column even after v1.9.3. Query passes every registered order status so custom statuses (wc-shipped, etc.) on source orders are included. Same dedupe-by-tracking-number behavior, same kill switch (`FST_FULFILLMENT_DISPLAY_AGGREGATION_OFF`).
+
 ## [1.9.3]
 
 - Display fix: the Tracking column on the WooCommerce Orders list and the Shipment Tracking meta box on fulfillment edit pages now fan IN from `_fishotel_fulfillment_sources` when the fulfillment itself has no direct shipments (the inverse view of the v1.9.0 write-side fan-out). Previously a fulfillment with shipped sources rendered as "—" / "no tracking" because the rows are keyed to source order IDs. Shipments are deduped by tracking number so one badge renders per physical box. Write paths (create/remove/poll) still use direct lookups and only touch rows actually owned by their order.
