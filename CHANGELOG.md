@@ -2,6 +2,10 @@
 
 All notable changes to FisHotel ShipTracker will be documented in this file.
 
+## [1.9.2]
+
+- "Delivery Date" column on the WooCommerce Orders list always shows the customer-requested delivery date from `_fishotel_shipping_date` now, even when tracking has been added. The pre-1.9.2 behavior switched to the shipment's `ship_date` once tracking was attached, which broke the column's purpose (planning upcoming shipments). Per-shipment ship dates are still visible inside the order's Shipment Tracking meta box.
+
 ## [1.9.1]
 
 - Hotfix: fan-out now parses the comma-separated string format the FisHotel theme actually uses for `_fishotel_fulfillment_sources` ("34168,34159"). v1.9.0 only checked `is_array()`, so fan-out silently fell through to the legacy single-shipment path on real fulfillment orders. Array format is still accepted for forward compatibility.
