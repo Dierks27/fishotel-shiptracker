@@ -234,12 +234,21 @@ class FST_Tracker {
 
         // Send customer email.
         if ( ! empty( $actions['email_customer'] ) ) {
-            $this->send_email( $shipment, $order, $new_status, $order->get_billing_email() );
+            // Filter point so themes can suppress duplicates within a
+            // fulfillment group (one combined shipped-email per customer
+            // when multiple source orders ship in the same box).
+            $send_customer = apply_filters( 'fst_send_customer_email', true, $shipment, $order, $new_status );
+            if ( $send_customer ) {
+                $this->send_email( $shipment, $order, $new_status, $order->get_billing_email() );
+            }
         }
 
         // Send admin email.
         if ( ! empty( $actions['email_admin'] ) ) {
-            $this->send_email( $shipment, $order, $new_status, get_option( 'admin_email' ), true );
+            $send_admin = apply_filters( 'fst_send_admin_email', true, $shipment, $order, $new_status );
+            if ( $send_admin ) {
+                $this->send_email( $shipment, $order, $new_status, get_option( 'admin_email' ), true );
+            }
         }
 
         // Change WooCommerce order status.
