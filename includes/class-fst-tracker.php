@@ -297,6 +297,23 @@ class FST_Tracker {
             }
         }
 
+        // Auto-complete on delivered. Wires the General Settings "Auto-Complete
+        // Orders" checkbox to actual behavior — the v1.9.6 refactor moved the
+        // status-transition logic into the Status Actions block above but
+        // never re-attached this option, so it sat unread for several versions
+        // and orders stayed at Shipped after every shipment delivered.
+        // Coverage-guarded: multi-shipment orders only complete when every
+        // line item is in a delivered shipment.
+        if ( 'delivered' === $new_status
+             && '1' === (string) get_option( 'fst_auto_complete_orders', '0' )
+             && $this->is_order_fully_delivered( $order )
+             && 'completed' !== $order->get_status() ) {
+            $order->update_status(
+                'completed',
+                'ShipTracker: all shipments delivered — order auto-completed.'
+            );
+        }
+
         // Send SMS notification via email-to-SMS gateway.
         $this->send_sms( $shipment, $order, $new_status );
 
