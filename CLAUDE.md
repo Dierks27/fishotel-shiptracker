@@ -1,6 +1,6 @@
 # FisHotel ShipTracker - Project Overview & Instruction Manual
 
-**Version:** 1.9.9
+**Version:** 1.9.10
 **Author:** FisHotel
 **Type:** WordPress / WooCommerce Plugin (Proprietary)
 **Repository:** Dierks27/fishotel-shiptracker

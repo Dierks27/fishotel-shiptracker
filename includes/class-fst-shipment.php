@@ -346,7 +346,10 @@ class FST_Shipment {
             $values[] = $date_to;
         }
 
-        $sql = "SELECT status, COUNT(*) as count FROM " . self::table() . " {$where} GROUP BY status";
+        // Dedupe across fan-out rows: combined-box shipments produce one row
+        // per source order with the same tracking_number, but a stat card
+        // should count one physical box, not N rows.
+        $sql = "SELECT status, COUNT(DISTINCT tracking_number) as count FROM " . self::table() . " {$where} GROUP BY status";
 
         $results = empty( $values )
             ? $wpdb->get_results( $sql )
@@ -456,7 +459,7 @@ class FST_Shipment {
             $values[] = $date_to;
         }
 
-        $sql = "SELECT carrier, COUNT(*) as count FROM " . self::table() . " {$where} GROUP BY carrier";
+        $sql = "SELECT carrier, COUNT(DISTINCT tracking_number) as count FROM " . self::table() . " {$where} GROUP BY carrier";
 
         $results = empty( $values )
             ? $wpdb->get_results( $sql )
@@ -487,7 +490,7 @@ class FST_Shipment {
         }
 
         return $wpdb->get_results( $wpdb->prepare(
-            "SELECT DATE(ship_date) as date, COUNT(*) as count
+            "SELECT DATE(ship_date) as date, COUNT(DISTINCT tracking_number) as count
              FROM " . self::table() . "
              WHERE status NOT IN ('unknown','label_created')
              AND ship_date IS NOT NULL
@@ -522,7 +525,13 @@ class FST_Shipment {
             $values[] = $date_to;
         }
 
-        $sql = "SELECT AVG(DATEDIFF(delivered_date, ship_date)) FROM " . self::table() . " {$where}";
+        // Dedupe before averaging so a combined-box shipment (one tracking#,
+        // N fan-out rows) contributes a single data point, not N.
+        $sql = "SELECT AVG(DATEDIFF(dlv, shp)) FROM (
+                    SELECT MIN(ship_date) AS shp, MIN(delivered_date) AS dlv
+                    FROM " . self::table() . " {$where}
+                    GROUP BY tracking_number
+                ) AS dedup";
 
         $avg = empty( $values )
             ? $wpdb->get_var( $sql )
@@ -553,8 +562,17 @@ class FST_Shipment {
             $values[] = $date_to;
         }
 
-        $sql = "SELECT carrier, AVG(DATEDIFF(delivered_date, ship_date)) as avg_days, COUNT(*) as count
-                FROM " . self::table() . " {$where} GROUP BY carrier";
+        // Same dedupe as avg_delivery_days(): one row per tracking_number
+        // before averaging, so combined-box shipments aren't double-weighted.
+        $sql = "SELECT carrier, AVG(DATEDIFF(dlv, shp)) as avg_days, COUNT(*) as count
+                FROM (
+                    SELECT tracking_number, carrier,
+                           MIN(ship_date) AS shp,
+                           MIN(delivered_date) AS dlv
+                    FROM " . self::table() . " {$where}
+                    GROUP BY tracking_number
+                ) AS dedup
+                GROUP BY carrier";
 
         $results = empty( $values )
             ? $wpdb->get_results( $sql )
@@ -588,7 +606,7 @@ class FST_Shipment {
         }
 
         return $wpdb->get_results( $wpdb->prepare(
-            "SELECT DATE(delivered_date) as date, COUNT(*) as count
+            "SELECT DATE(delivered_date) as date, COUNT(DISTINCT tracking_number) as count
              FROM " . self::table() . "
              WHERE status = 'delivered'
              AND delivered_date IS NOT NULL
