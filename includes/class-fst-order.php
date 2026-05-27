@@ -397,6 +397,12 @@ class FST_Order {
      * the single source of truth for the link). The `_fishotel_fulfillment_sources`
      * cache on the fulfillment itself can be empty or stale on real data.
      *
+     * Intentionally NOT gated on order status: theme v1.18.2 auto-advances
+     * fulfillments to wc-shipped / wc-completed once their sources ship, and
+     * the column has to keep showing the badges through that whole lifecycle.
+     * Non-fulfillment orders pass through harmlessly — nothing points up at
+     * them, so the inverse query returns empty.
+     *
      * Display-only — write paths still use `FST_Shipment::get_by_order()`
      * directly so they only act on rows actually owned by that order.
      *
@@ -420,23 +426,21 @@ class FST_Order {
             return array();
         }
 
-        $order = wc_get_order( $order_id );
-        if ( ! $order || 'fulfillment' !== $order->get_status() ) {
+        if ( ! wc_get_order( $order_id ) ) {
             return array();
         }
 
-        // Find every source order that points back to this fulfillment.
+        // Find every source order that points back at this fulfillment.
         // _fishotel_fulfilled_by_order lives on the SOURCE — the theme's
-        // documented single source of truth for the link.
+        // documented single source of truth for the link. status=any covers
+        // the whole fulfillment lifecycle (wc-fulfillment → wc-shipped →
+        // wc-completed) as well as anything custom.
         $source_ids = wc_get_orders( array(
             'meta_key'   => '_fishotel_fulfilled_by_order',
             'meta_value' => $order_id,
             'limit'      => -1,
             'return'     => 'ids',
-            // Include every status (custom + core) so a shipped/completed
-            // source still surfaces. wc_get_orders defaults filter to the
-            // core "shop" statuses, which would hide e.g. wc-shipped.
-            'status'     => array_keys( wc_get_order_statuses() ),
+            'status'     => 'any',
         ) );
 
         if ( empty( $source_ids ) ) {

@@ -2,6 +2,10 @@
 
 All notable changes to FisHotel ShipTracker will be documented in this file.
 
+## [1.9.5]
+
+- Hotfix: removed the `wc-fulfillment` status guard from `get_effective_shipments` so the display fan-in keeps working after theme v1.18.2's auto-advance flips fulfillments to `wc-shipped` / `wc-completed`. Without this, FF-34197 / FF-34202 rendered "—" forever once their sources shipped, even though the inverse `_fishotel_fulfilled_by_order` query returns the right sources. Inverse query now uses `status => 'any'` to cover the whole fulfillment lifecycle. Non-fulfillment orders are unaffected (nothing points up at them, query returns empty).
+
 ## [1.9.4]
 
 - Hotfix: fulfillment display fan-in now uses an inverse `wc_get_orders()` query against `_fishotel_fulfilled_by_order` (set on each SOURCE order — per the theme, the single source of truth for the link) instead of reading `_fishotel_fulfillment_sources` from the fulfillment. The cache meta on the fulfillment can be empty or stale on real data, which left FF-34197 / FF-34202 rendering "—" in the Tracking column even after v1.9.3. Query passes every registered order status so custom statuses (wc-shipped, etc.) on source orders are included. Same dedupe-by-tracking-number behavior, same kill switch (`FST_FULFILLMENT_DISPLAY_AGGREGATION_OFF`).
