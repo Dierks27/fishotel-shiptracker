@@ -2,6 +2,11 @@
 
 All notable changes to FisHotel ShipTracker will be documented in this file.
 
+## [1.9.8]
+
+- Shipment Tracking meta-box now renders a per-item checkbox picker ("Items in this shipment") on regular orders, with a "Select all unshipped items" master toggle. Already-shipped items show crossed out and disabled. Submitting with nothing selected returns a clear error instead of silently mis-scoping the shipment.
+- `ajax_add_tracking()` requires an explicit `line_item_ids[]` selection for non-fulfillment orders. v1.9.7's silent "default to all items" fallback caused mixed orders (e.g. fish + EA meds) to auto-flip to Shipped the moment any single box was tracked, firing a misleading "your order has shipped" email while the rest was still at FisHotel. Fulfillment orders still default to all source items per source (the fan-out path doesn't render the picker because fulfillment items don't 1:1 with source items).
+
 ## [1.9.7]
 
 - Hotfix: the Shipment Tracking meta box (and the non-AJAX `save_tracking_data` fallback) now default a shipment's `line_item_ids` to every line item on the target order when the request doesn't POST a subset. v1.9.6 made the coverage check strict — without this default, meta-box adds produced `line_item_ids = NULL` and the order was stuck in Processing forever because the lone shipment contributed zero coverage. Explicit subsets (fulfillment fan-out for partial boxes) still intersect against the source order's items as before, so the strict partial-shipment behavior introduced in v1.9.6 is preserved for that path.
