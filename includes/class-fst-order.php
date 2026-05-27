@@ -345,11 +345,17 @@ class FST_Order {
     }
 
     /**
-     * Whether every line item on $order is covered by at least one shipment.
+     * Whether every line item on $order is explicitly covered by at least one
+     * shipment's `line_item_ids` list.
      *
-     * A shipment with NULL line_item_ids is treated as covering ALL items of
-     * its order (the pre-1.9 semantic — preserves backwards compatibility for
-     * rows created before the column existed).
+     * The pre-1.9.6 implementation treated a shipment with empty/NULL
+     * line_item_ids as "covers everything", which misfired on partial
+     * fulfillments: adding tracking for one box (e.g. EA pellets) would flip
+     * the entire mixed order Processing → Shipped and trigger a misleading
+     * "your order has shipped" email even though the fish were still in QT.
+     * Now: only shipments with an explicit line_item_ids list contribute to
+     * coverage, and every order item id must appear in at least one such
+     * list. Empty order or no shipments → false.
      *
      * @param WC_Order $order
      * @return bool
@@ -357,16 +363,18 @@ class FST_Order {
     private function is_order_fully_shipped( $order ) {
         $order_item_ids = array_keys( $order->get_items() );
         if ( empty( $order_item_ids ) ) {
-            return true;
+            return false;
         }
 
-        $shipments   = FST_Shipment::get_by_order( $order->get_id() );
-        $covered_ids = array();
+        $shipments = FST_Shipment::get_by_order( $order->get_id() );
+        if ( empty( $shipments ) ) {
+            return false;
+        }
 
+        $covered_ids = array();
         foreach ( $shipments as $s ) {
             if ( empty( $s->line_item_ids ) ) {
-                // NULL/empty line_item_ids — shipment covers everything on this order.
-                return true;
+                continue;
             }
             $ids = json_decode( $s->line_item_ids, true );
             if ( is_array( $ids ) ) {

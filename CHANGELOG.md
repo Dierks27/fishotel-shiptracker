@@ -2,6 +2,10 @@
 
 All notable changes to FisHotel ShipTracker will be documented in this file.
 
+## [1.9.6]
+
+- Fix: `is_order_fully_shipped()` no longer assumes a shipment with empty/NULL `line_item_ids` covers every item on the order. That assumption was misfiring on partial fulfillments — e.g. adding EA-pellet tracking to a mixed order with live fish (#34183) auto-flipped the order Processing → Shipped and triggered a misleading "your order has shipped" email while the fish were still in QT. Coverage now requires every order line item to appear in some shipment's explicit `line_item_ids` list. Empty order / zero shipments → false. Companion `is_order_fully_delivered()` in the tracker class is intentionally unchanged in this hotfix.
+
 ## [1.9.5]
 
 - Hotfix: removed the `wc-fulfillment` status guard from `get_effective_shipments` so the display fan-in keeps working after theme v1.18.2's auto-advance flips fulfillments to `wc-shipped` / `wc-completed`. Without this, FF-34197 / FF-34202 rendered "—" forever once their sources shipped, even though the inverse `_fishotel_fulfilled_by_order` query returns the right sources. Inverse query now uses `status => 'any'` to cover the whole fulfillment lifecycle. Non-fulfillment orders are unaffected (nothing points up at them, query returns empty).
