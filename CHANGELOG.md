@@ -2,6 +2,10 @@
 
 All notable changes to FisHotel ShipTracker will be documented in this file.
 
+## [1.9.11]
+
+- `FST_Tracker::process_status_change()` now consults line-item coverage before auto-advancing the WooCommerce order to "shipped". v1.9.6 already added the symmetric guard for the "delivered → completed" auto-complete path, but the "in_transit/out_for_delivery → shipped" path still flipped the order on the first matching event. On a multi-shipment order where one box reached Out for Delivery while other items were still unshipped, the order would prematurely advance to Shipped and fire the customer-facing "shipped" email. Now: when the configured `order_status` target is `shipped` and `is_order_fully_shipped()` returns false, the transition is skipped and an order note is logged instead. Added a private `is_order_fully_shipped()` mirror on `FST_Tracker` matching the canonical helper on `FST_Order`.
+
 ## [1.9.10]
 
 - Stat aggregations now count unique physical shipments instead of rows. Combined-box fulfillments produce one shipment row per source order sharing a single `tracking_number`; previously a 5-box day reported as 7 In Transit, Delivered, etc. Switched `COUNT(*)` → `COUNT(DISTINCT tracking_number)` in `count_by_status()`, `count_by_carrier()`, `count_per_day()`, and `deliveries_per_day()`. `avg_delivery_days()` and `avg_delivery_days_by_carrier()` now average over a per-tracking dedupe subquery so a combined-box shipment contributes one data point instead of N. No schema change. (`get_late_shipments()` still returns one row per fan-out — out of scope here.)
