@@ -127,8 +127,11 @@ class FST_Order {
                 // Fulfillment items don't 1:1 with source order items, and
                 // ajax_add_tracking handles the fan-out via meta lookup. Skip
                 // the per-item picker on fulfillments so it doesn't mis-scope
-                // shipments.
-                $is_fulfillment = $order && 'fulfillment' === $order->get_status();
+                // shipments. Detect via meta (theme sets _fishotel_is_fulfillment
+                // = '1' on creation and it stays put) rather than status, which
+                // can be flipped past Fulfillment manually or by other
+                // automation and would silently lose the fan-out.
+                $is_fulfillment = $order && '1' === (string) $order->get_meta( '_fishotel_is_fulfillment' );
 
                 if ( ! $is_fulfillment && ! empty( $line_items ) ) :
                     // Items already covered by an existing shipment shouldn't
@@ -274,7 +277,10 @@ class FST_Order {
         // below (their items don't 1:1 with source items, so the meta-box
         // doesn't render the picker).
         $submitting_order = wc_get_order( $order_id );
-        $is_fulfillment   = $submitting_order && 'fulfillment' === $submitting_order->get_status();
+        // Detect fulfillment via meta, not status — the order may have been
+        // flipped past Fulfillment (Shipped, Processing, Completed) and we
+        // still need to fan tracking out to source orders.
+        $is_fulfillment   = $submitting_order && '1' === (string) $submitting_order->get_meta( '_fishotel_is_fulfillment' );
         if ( ! $is_fulfillment && empty( $line_item_ids ) ) {
             wp_send_json_error( 'Please select at least one item in this shipment.' );
         }
@@ -403,7 +409,10 @@ class FST_Order {
             return array( (int) $order_id );
         }
 
-        if ( 'fulfillment' === $order->get_status() ) {
+        // Meta-based detection: the order may have moved past Fulfillment
+        // status (manually reverted, auto-advanced, etc.) but it's still a
+        // combined-box meta order and tracking must still fan out.
+        if ( '1' === (string) $order->get_meta( '_fishotel_is_fulfillment' ) ) {
             $raw_sources = $order->get_meta( '_fishotel_fulfillment_sources' );
 
             // The FisHotel theme stores this meta as a comma-separated string

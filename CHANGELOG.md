@@ -2,6 +2,10 @@
 
 All notable changes to FisHotel ShipTracker will be documented in this file.
 
+## [1.9.14]
+
+- Fulfillment detection now uses the `_fishotel_is_fulfillment` post meta instead of `'fulfillment' === $order->get_status()`. The theme sets the meta to `'1'` on creation and it stays put, but the order status can be flipped past Fulfillment (Shipped, Processing after manual revert, Completed) — when that happened, `ajax_add_tracking` mis-classified the order as regular, rendered the picker for fulfillment items, and saved the shipment on the fulfillment row directly with empty `line_item_ids` instead of fanning out to source orders. Updated the three status-based checks in `class-fst-order.php` (meta-box picker render, `ajax_add_tracking` validation, and `resolve_target_order_ids` fan-out gate).
+
 ## [1.9.13]
 
 - Auto-complete default flipped from `'0'` to `'1'` in `process_status_change()` to match the rest of the codebase (activator seeds the option to `1`; settings form reads with default `true`). No behavior change on any install where the activator has run; matters only on the edge case where `get_option` runs before the option exists.
