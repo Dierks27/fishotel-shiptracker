@@ -225,13 +225,22 @@ class FST_Order {
                 continue;
             }
 
-            // Filter line_item_ids down to those that actually belong to this source order.
+            // Resolve line_item_ids for this source order:
+            //   - If the request explicitly POSTed a subset (fulfillment fan-out
+            //     for a partial box), intersect with this source's items.
+            //   - Otherwise (meta-box UI add — the common case), default to
+            //     every item on the target order. v1.9.6 made the coverage
+            //     check strict; without this default, single-shipment orders
+            //     would never auto-advance Processing → Shipped because their
+            //     one shipment row would carry line_item_ids = NULL.
             $items_for_this_order = array();
-            if ( ! empty( $line_item_ids ) ) {
-                $source_order = wc_get_order( $target_id );
-                if ( $source_order ) {
-                    $source_item_ids      = array_keys( $source_order->get_items() );
+            $source_order         = wc_get_order( $target_id );
+            if ( $source_order ) {
+                $source_item_ids = array_keys( $source_order->get_items() );
+                if ( ! empty( $line_item_ids ) ) {
                     $items_for_this_order = array_values( array_intersect( $line_item_ids, $source_item_ids ) );
+                } else {
+                    $items_for_this_order = $source_item_ids;
                 }
             }
 
@@ -589,13 +598,20 @@ class FST_Order {
                 continue;
             }
 
+            // Default the shipment to covering every item on the target order
+            // (same reasoning as ajax_add_tracking: v1.9.6's strict coverage
+            // check would otherwise leave Processing orders stuck forever
+            // because the non-AJAX form has no line_item_ids[] field).
+            $source_order  = wc_get_order( $target_id );
+            $all_item_ids  = $source_order ? array_keys( $source_order->get_items() ) : array();
+
             FST_Shipment::create( array(
                 'order_id'        => $target_id,
                 'tracking_number' => $tracking_number,
                 'carrier'         => $carrier,
+                'line_item_ids'   => ! empty( $all_item_ids ) ? wp_json_encode( $all_item_ids ) : null,
             ) );
 
-            $source_order = wc_get_order( $target_id );
             if ( $source_order && 'processing' === $source_order->get_status()
                  && $this->is_order_fully_shipped( $source_order ) ) {
                 $source_order->set_status( 'shipped', 'ShipTracker: all items now have tracking.' );

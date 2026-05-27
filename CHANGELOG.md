@@ -2,6 +2,10 @@
 
 All notable changes to FisHotel ShipTracker will be documented in this file.
 
+## [1.9.7]
+
+- Hotfix: the Shipment Tracking meta box (and the non-AJAX `save_tracking_data` fallback) now default a shipment's `line_item_ids` to every line item on the target order when the request doesn't POST a subset. v1.9.6 made the coverage check strict — without this default, meta-box adds produced `line_item_ids = NULL` and the order was stuck in Processing forever because the lone shipment contributed zero coverage. Explicit subsets (fulfillment fan-out for partial boxes) still intersect against the source order's items as before, so the strict partial-shipment behavior introduced in v1.9.6 is preserved for that path.
+
 ## [1.9.6]
 
 - Fix: `is_order_fully_shipped()` no longer assumes a shipment with empty/NULL `line_item_ids` covers every item on the order. That assumption was misfiring on partial fulfillments — e.g. adding EA-pellet tracking to a mixed order with live fish (#34183) auto-flipped the order Processing → Shipped and triggered a misleading "your order has shipped" email while the fish were still in QT. Coverage now requires every order line item to appear in some shipment's explicit `line_item_ids` list. Empty order / zero shipments → false. Companion `is_order_fully_delivered()` in the tracker class is intentionally unchanged in this hotfix.
