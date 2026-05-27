@@ -2,6 +2,10 @@
 
 All notable changes to FisHotel ShipTracker will be documented in this file.
 
+## [1.9.13]
+
+- Auto-complete default flipped from `'0'` to `'1'` in `process_status_change()` to match the rest of the codebase (activator seeds the option to `1`; settings form reads with default `true`). No behavior change on any install where the activator has run; matters only on the edge case where `get_option` runs before the option exists.
+
 ## [1.9.12]
 
 - Restored the General Settings → "Auto-Complete Orders" checkbox. The option was being saved by `class-fst-settings.php` but `process_status_change()` never read it, so orders sat at Shipped after every shipment delivered. Added a standalone, coverage-guarded auto-complete block in `FST_Tracker::process_status_change()` that fires after the existing Status Actions block: when a shipment transitions to delivered, the option is `'1'`, and every line item is in a delivered shipment, the order is transitioned to Completed. Multi-shipment orders still hold until the last shipment delivers. No-op if the option is off or the order is already Completed.

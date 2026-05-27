@@ -305,7 +305,7 @@ class FST_Tracker {
         // Coverage-guarded: multi-shipment orders only complete when every
         // line item is in a delivered shipment.
         if ( 'delivered' === $new_status
-             && '1' === (string) get_option( 'fst_auto_complete_orders', '0' )
+             && '1' === (string) get_option( 'fst_auto_complete_orders', '1' )
              && $this->is_order_fully_delivered( $order )
              && 'completed' !== $order->get_status() ) {
             $order->update_status(
