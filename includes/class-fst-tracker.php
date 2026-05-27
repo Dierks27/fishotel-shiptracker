@@ -256,15 +256,20 @@ class FST_Tracker {
             $target_status = $actions['order_status'];
             $current       = $order->get_status();
 
-            // Guard: only auto-complete the source order once EVERY line item is
-            // covered by a delivered shipment. Otherwise a partial fan-out (one
-            // box delivered, another still in transit) would prematurely flip
-            // the order to Completed.
-            $should_complete = 'completed' !== $target_status
-                || 'delivered' !== $new_status
-                || $this->is_order_fully_delivered( $order );
+            // Coverage guards: don't auto-advance the order to a "this is done"
+            // status when only one of N shipments has reached the trigger
+            // status. The completed guard was added in v1.9.6 (auto-complete);
+            // the shipped guard is v1.9.11 — without it, an OFD event on one
+            // box would flip a multi-shipment order to Shipped even when other
+            // items still don't have tracking.
+            $blocked_partial_complete = 'completed' === $target_status
+                && 'delivered' === $new_status
+                && ! $this->is_order_fully_delivered( $order );
 
-            if ( ! $should_complete ) {
+            $blocked_partial_shipped = 'shipped' === $target_status
+                && ! $this->is_order_fully_shipped( $order );
+
+            if ( $blocked_partial_complete ) {
                 $order->add_order_note(
                     sprintf(
                         'Partial delivery: tracking %s delivered, other shipments still pending. Order kept in %s.',
@@ -274,6 +279,17 @@ class FST_Tracker {
                     false
                 );
                 $this->log( sprintf( 'Order %d: skipped auto-complete (partial delivery)', $shipment->order_id ) );
+            } elseif ( $blocked_partial_shipped ) {
+                $order->add_order_note(
+                    sprintf(
+                        'ShipTracker: shipment %s reached %s, but order has unshipped items — status held at %s.',
+                        $shipment->tracking_number,
+                        FST_Carrier::get_status_label( $new_status ),
+                        $current
+                    ),
+                    false
+                );
+                $this->log( sprintf( 'Order %d: skipped auto-shipped (partial shipment)', $shipment->order_id ) );
             } elseif ( $target_status !== $current ) {
                 $order->set_status( $target_status, sprintf( 'ShipTracker: shipment %s', FST_Carrier::get_status_label( $new_status ) ) );
                 $order->save();
@@ -408,6 +424,44 @@ class FST_Tracker {
         $headers = array( 'Content-Type: text/html; charset=UTF-8' );
         $sent    = wp_mail( $to, $rendered['subject'], $rendered['html_body'], $headers );
         $this->log( sprintf( 'Email to %s for %s status: %s', $to, $status, $sent ? 'sent' : 'FAILED' ) );
+    }
+
+    /**
+     * Whether every line item on $order is covered by at least one shipment.
+     *
+     * Mirrors FST_Order::is_order_fully_shipped(). A shipment row with
+     * NULL/empty line_item_ids contributes no coverage (post-v1.9.6 strict
+     * semantics) — only rows that explicitly list item ids count.
+     *
+     * @param WC_Order $order
+     * @return bool
+     */
+    private function is_order_fully_shipped( $order ) {
+        $order_item_ids = array_keys( $order->get_items() );
+        if ( empty( $order_item_ids ) ) {
+            return false;
+        }
+
+        $shipments = FST_Shipment::get_by_order( $order->get_id() );
+        if ( empty( $shipments ) ) {
+            return false;
+        }
+
+        $covered_ids = array();
+        foreach ( $shipments as $s ) {
+            if ( empty( $s->line_item_ids ) ) {
+                continue;
+            }
+            $ids = json_decode( $s->line_item_ids, true );
+            if ( is_array( $ids ) ) {
+                $covered_ids = array_merge( $covered_ids, array_map( 'absint', $ids ) );
+            }
+        }
+
+        $covered_ids = array_unique( $covered_ids );
+        $uncovered   = array_diff( $order_item_ids, $covered_ids );
+
+        return empty( $uncovered );
     }
 
     /**
