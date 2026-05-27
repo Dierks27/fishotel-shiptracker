@@ -2,6 +2,10 @@
 
 All notable changes to FisHotel ShipTracker will be documented in this file.
 
+## [1.9.10]
+
+- Stat aggregations now count unique physical shipments instead of rows. Combined-box fulfillments produce one shipment row per source order sharing a single `tracking_number`; previously a 5-box day reported as 7 In Transit, Delivered, etc. Switched `COUNT(*)` → `COUNT(DISTINCT tracking_number)` in `count_by_status()`, `count_by_carrier()`, `count_per_day()`, and `deliveries_per_day()`. `avg_delivery_days()` and `avg_delivery_days_by_carrier()` now average over a per-tracking dedupe subquery so a combined-box shipment contributes one data point instead of N. No schema change. (`get_late_shipments()` still returns one row per fan-out — out of scope here.)
+
 ## [1.9.9]
 
 - Added `fst_send_customer_email` and `fst_send_admin_email` filters in `FST_Tracker::process_status_change()`. Each filter receives `(bool $send, FST_Shipment $shipment, WC_Order $order, string $new_status)` and defaults to `true`, so behavior is unchanged for anyone not hooking it. The theme can return `false` to suppress duplicate "your order has shipped" emails when multiple source orders ship in the same fulfillment box (consolidated email is dispatched separately).
