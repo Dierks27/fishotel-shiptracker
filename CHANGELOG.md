@@ -2,6 +2,10 @@
 
 All notable changes to FisHotel ShipTracker will be documented in this file.
 
+## [1.9.9]
+
+- Added `fst_send_customer_email` and `fst_send_admin_email` filters in `FST_Tracker::process_status_change()`. Each filter receives `(bool $send, FST_Shipment $shipment, WC_Order $order, string $new_status)` and defaults to `true`, so behavior is unchanged for anyone not hooking it. The theme can return `false` to suppress duplicate "your order has shipped" emails when multiple source orders ship in the same fulfillment box (consolidated email is dispatched separately).
+
 ## [1.9.8]
 
 - Shipment Tracking meta-box now renders a per-item checkbox picker ("Items in this shipment") on regular orders, with a "Select all unshipped items" master toggle. Already-shipped items show crossed out and disabled. Submitting with nothing selected returns a clear error instead of silently mis-scoping the shipment.
