@@ -2,6 +2,10 @@
 
 All notable changes to FisHotel ShipTracker will be documented in this file.
 
+## [1.9.12]
+
+- Restored the General Settings → "Auto-Complete Orders" checkbox. The option was being saved by `class-fst-settings.php` but `process_status_change()` never read it, so orders sat at Shipped after every shipment delivered. Added a standalone, coverage-guarded auto-complete block in `FST_Tracker::process_status_change()` that fires after the existing Status Actions block: when a shipment transitions to delivered, the option is `'1'`, and every line item is in a delivered shipment, the order is transitioned to Completed. Multi-shipment orders still hold until the last shipment delivers. No-op if the option is off or the order is already Completed.
+
 ## [1.9.11]
 
 - `FST_Tracker::process_status_change()` now consults line-item coverage before auto-advancing the WooCommerce order to "shipped". v1.9.6 already added the symmetric guard for the "delivered → completed" auto-complete path, but the "in_transit/out_for_delivery → shipped" path still flipped the order on the first matching event. On a multi-shipment order where one box reached Out for Delivery while other items were still unshipped, the order would prematurely advance to Shipped and fire the customer-facing "shipped" email. Now: when the configured `order_status` target is `shipped` and `is_order_fully_shipped()` returns false, the transition is skipped and an order note is logged instead. Added a private `is_order_fully_shipped()` mirror on `FST_Tracker` matching the canonical helper on `FST_Order`.
