@@ -121,6 +121,62 @@ class FST_Order {
 
             <!-- Add new tracking form -->
             <div class="fst-add-tracking-form">
+                <?php
+                $order      = wc_get_order( $order_id );
+                $line_items = $order ? $order->get_items() : array();
+                // Fulfillment items don't 1:1 with source order items, and
+                // ajax_add_tracking handles the fan-out via meta lookup. Skip
+                // the per-item picker on fulfillments so it doesn't mis-scope
+                // shipments.
+                $is_fulfillment = $order && 'fulfillment' === $order->get_status();
+
+                if ( ! $is_fulfillment && ! empty( $line_items ) ) :
+                    // Items already covered by an existing shipment shouldn't
+                    // be selectable again — they're crossed out and disabled.
+                    $covered_item_ids = array();
+                    foreach ( $shipments as $sh ) {
+                        if ( empty( $sh->line_item_ids ) ) {
+                            continue;
+                        }
+                        $ids = json_decode( $sh->line_item_ids, true );
+                        if ( is_array( $ids ) ) {
+                            $covered_item_ids = array_merge( $covered_item_ids, array_map( 'absint', $ids ) );
+                        }
+                    }
+                    $covered_item_ids = array_unique( $covered_item_ids );
+                    ?>
+                    <div class="fst-line-items-scope" style="margin-bottom: 8px; padding: 8px; background: #f9f9f9; border: 1px solid #e0e0e0; border-radius: 4px;">
+                        <p style="margin: 0 0 6px; font-weight: 600; font-size: 12px;">Items in this shipment:</p>
+                        <label style="display:block; margin-bottom:4px; font-size:12px;">
+                            <input type="checkbox" id="fst-select-all-items" checked>
+                            <em>Select all unshipped items</em>
+                        </label>
+                        <?php foreach ( $line_items as $item_id => $item ) :
+                            $is_covered = in_array( (int) $item_id, $covered_item_ids, true );
+                            $row_style  = 'display:block; margin:2px 0 2px 16px; font-size:12px;';
+                            if ( $is_covered ) {
+                                $row_style .= 'color:#999; text-decoration:line-through;';
+                            }
+                            ?>
+                            <label style="<?php echo esc_attr( $row_style ); ?>">
+                                <?php if ( $is_covered ) : ?>
+                                    <input type="checkbox" disabled>
+                                <?php else : ?>
+                                    <input type="checkbox" name="line_item_ids[]"
+                                           value="<?php echo esc_attr( $item_id ); ?>"
+                                           class="fst-item-checkbox" checked>
+                                <?php endif; ?>
+                                <?php echo esc_html( $item->get_name() ); ?>
+                                <?php if ( $item->get_quantity() > 1 ) : ?>
+                                    <span style="color:#999;"> &times; <?php echo esc_html( $item->get_quantity() ); ?></span>
+                                <?php endif; ?>
+                                <?php if ( $is_covered ) : ?>
+                                    <span style="font-size:10px; color:#1e7e34; text-decoration:none; margin-left:4px;">[shipped]</span>
+                                <?php endif; ?>
+                            </label>
+                        <?php endforeach; ?>
+                    </div>
+                <?php endif; ?>
                 <p>
                     <input type="text" id="fst-tracking-number" name="fst_tracking_number"
                            placeholder="Enter tracking number" class="widefat"
@@ -209,6 +265,20 @@ class FST_Order {
             $carrier = FST_Carrier::detect_carrier( $tracking_number );
         }
 
+        // Regular (non-fulfillment) orders must POST an explicit line_item_ids[]
+        // subset from the meta-box checkboxes. Without that guard, mixed orders
+        // (e.g. fish + EA pellets) would silently auto-flip to Shipped when
+        // tracking is added for one box, and the customer would get a
+        // "your order has shipped" email while the other items are still here.
+        // Fulfillment orders still fall through to the per-source default
+        // below (their items don't 1:1 with source items, so the meta-box
+        // doesn't render the picker).
+        $submitting_order = wc_get_order( $order_id );
+        $is_fulfillment   = $submitting_order && 'fulfillment' === $submitting_order->get_status();
+        if ( ! $is_fulfillment && empty( $line_item_ids ) ) {
+            wp_send_json_error( 'Please select at least one item in this shipment.' );
+        }
+
         // Fan out to source orders when this is a fulfillment order.
         $target_order_ids = $this->resolve_target_order_ids( $order_id );
         if ( empty( $target_order_ids ) ) {
@@ -226,13 +296,12 @@ class FST_Order {
             }
 
             // Resolve line_item_ids for this source order:
-            //   - If the request explicitly POSTed a subset (fulfillment fan-out
-            //     for a partial box), intersect with this source's items.
-            //   - Otherwise (meta-box UI add — the common case), default to
-            //     every item on the target order. v1.9.6 made the coverage
-            //     check strict; without this default, single-shipment orders
-            //     would never auto-advance Processing → Shipped because their
-            //     one shipment row would carry line_item_ids = NULL.
+            //   - If the request explicitly POSTed a subset, intersect with this
+            //     source's items so each row only stores its own line items.
+            //   - Otherwise (only reachable on the fulfillment fan-out path now —
+            //     regular orders are rejected up front by the guard above),
+            //     default to every item on the source order so the strict
+            //     coverage check in is_order_fully_shipped() still passes.
             $items_for_this_order = array();
             $source_order         = wc_get_order( $target_id );
             if ( $source_order ) {

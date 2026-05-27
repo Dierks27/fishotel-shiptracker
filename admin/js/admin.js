@@ -26,6 +26,18 @@
 			// AJAX recheck tracking
 			$(document).on('click', '.fst-recheck-btn', $.proxy(this.recheckTracking, this));
 
+			// "Select all unshipped items" toggle in the Add Shipment form.
+			$(document).on('change', '#fst-select-all-items', function () {
+				$('.fst-item-checkbox').prop('checked', this.checked);
+			});
+
+			// Keep the master checkbox in sync when individual items change.
+			$(document).on('change', '.fst-item-checkbox', function () {
+				var total = $('.fst-item-checkbox').length;
+				var checked = $('.fst-item-checkbox:checked').length;
+				$('#fst-select-all-items').prop('checked', total > 0 && total === checked);
+			});
+
 			// Intercept Enter key inside the tracking form so it triggers
 			// the AJAX add instead of submitting the WooCommerce order form.
 			$(document).on('keypress', '#fst-tracking-number, #fst-carrier', function (e) {
@@ -73,6 +85,10 @@
 			var orderId = $('#fst-tracking-metabox').data('order-id');
 			var trackingNumber = ($('#fst-tracking-number').val() || '').trim();
 			var carrier = $('#fst-carrier').val() || 'auto';
+			var itemCheckboxes = $('.fst-item-checkbox');
+			var checkedItems = itemCheckboxes.filter(':checked').map(function () {
+				return $(this).val();
+			}).get();
 
 			var showMessage = function (type, text) {
 				messageBox
@@ -93,6 +109,16 @@
 				return false;
 			}
 
+			// If the per-item picker is rendered (i.e. this is a regular,
+			// non-fulfillment order with line items), require at least one
+			// item checked. Fulfillment orders render no picker, so the
+			// length check is skipped and the server-side fan-out handles
+			// the scope per source.
+			if (itemCheckboxes.length > 0 && checkedItems.length === 0) {
+				showMessage('error', 'Please select at least one item in this shipment.');
+				return false;
+			}
+
 			button.prop('disabled', true).text('Adding...');
 			messageBox.hide();
 
@@ -105,6 +131,7 @@
 					order_id: orderId,
 					tracking_number: trackingNumber,
 					carrier: carrier,
+					line_item_ids: checkedItems,
 				},
 				success: function (response) {
 					if (response && response.success) {
