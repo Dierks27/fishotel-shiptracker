@@ -1,6 +1,6 @@
 # FisHotel ShipTracker - Project Overview & Instruction Manual
 
-**Version:** 1.9.14
+**Version:** 1.9.16
 **Author:** FisHotel
 **Type:** WordPress / WooCommerce Plugin (Proprietary)
 **Repository:** Dierks27/fishotel-shiptracker
@@ -129,6 +129,8 @@ Import tracking data from Advanced Shipment Tracking (AST) or TrackShip plugins:
 4. Click **Add Tracking**
 5. The plugin will immediately poll the carrier API for the first status
 
+Scripts (the Finiship label skill) do the same thing through `POST /fst/v1/shipment` with an application password — see REST API Endpoints below. Both paths call `FST_Order::add_tracking()`; `ajax_add_tracking()` is only a `$_POST` wrapper around it, so the AJAX field names (`order_id`, `tracking_number`, `carrier`, `line_item_ids[]`) and payloads are unchanged.
+
 ### Fulfillment Order Fan-Out
 When tracking is added to a Fulfillment order (a combined-box meta order with status `wc-fulfillment` owned by the Phase 2.5 fulfillment workflow), ShipTracker fans the tracking number out to every source order listed in the `_fishotel_fulfillment_sources` meta. This creates one `wp_fst_shipments` row per source order, all sharing the same tracking number — which is how customers on the source orders actually receive shipment emails (the fulfillment order itself is `customer = Guest`).
 
@@ -251,20 +253,42 @@ fishotel-shiptracker/
 │       ├── class-fst-carrier.php      # Abstract carrier base class
 │       ├── class-fst-carrier-ups.php  # UPS API (OAuth 2.0 + tracking)
 │       └── class-fst-carrier-usps.php # USPS API (OAuth 2.0 + tracking)
-└── assets/
-    └── css/frontend.css             # Customer-facing styles
+├── assets/
+│   └── css/frontend.css             # Customer-facing styles
+└── tests/
+    └── add-tracking-args-test.php   # Plain-PHP test of FST_Order::normalize_add_tracking_args() (php tests/add-tracking-args-test.php)
 ```
 
 ### REST API Endpoints
 
 | Endpoint | Method | Auth | Description |
 |----------|--------|------|-------------|
+| `/fst/v1/shipment` | POST | Admin | Add tracking to an order via `FST_Order::add_tracking()` — the same service as the meta box (fan-out, coverage, dedupe, auto-detect, EasyPost/first poll, order notes + status) |
+| `/fst/v1/order/{id}/shipments` | GET | Admin | Effective shipments (`get_effective_shipments()`) + line-item coverage for an order |
 | `/fst/v1/shipment/{id}` | GET | Admin | Get shipment details + events |
-| `/fst/v1/shipment` | POST | Admin | Create a new shipment |
 | `/fst/v1/shipment/{id}/recheck` | POST | Admin | Force tracking update |
 | `/fst/v1/track` | POST | Public | Customer lookup by order # + email |
 | `/fst/v1/analytics` | GET | Admin | Status counts and late shipments |
 | `/fst/v1/easypost-webhook` | POST | HMAC | EasyPost tracker.created/updated push |
+
+"Admin" = `permission_callback` is `admin_check()` → `current_user_can( 'manage_woocommerce' )`. It works with cookie + `X-WP-Nonce` (admin.js) **and** with WordPress Application Passwords sent as HTTP Basic auth over HTTPS: the plugin hooks neither `determine_current_user` nor `rest_authentication_errors`, and WooCommerce's key/secret auth only covers `wc/*`. If Basic auth yields `rest_not_logged_in`, the host is stripping the `Authorization` header — see README.md for the `.htaccess` fix.
+
+**`POST /shipment` params:** `order_id` (int, required — the order number in admin is the ID), `tracking_number` (required), `carrier` (`auto`|`ups`|`usps`, default `auto`, schema-enforced), `line_item_ids` (int array or comma-separated; required for regular orders; for a fulfillment order pass the *source* orders' item ids from `source_orders[].line_items[]` — never the fulfillment's own ids — and omit only when the box holds every item of every source), `ship_date` (optional `Y-m-d`, stored as midnight). Returns **201** with the service result (`message`, `shipment_id`, `shipment_ids`, `skipped_order_ids`, `failed_order_ids`, `carrier`, `shipments[]` post-poll summaries, `order_statuses{}`), or `{"error","code"}` mapped from the service `WP_Error`: 400 `fst_missing_args` / `fst_no_items` / `fst_nothing_added` / `fst_invalid_ship_date`, 404 `fst_order_not_found`, 409 `fst_duplicate_tracking`, 500 `fst_create_failed`. The messages are the ones the admin meta box shows.
+
+```bash
+curl -s -X POST 'https://fishotel.com/wp-json/fst/v1/shipment' \
+  -u 'jeff:abcd efgh ijkl mnop qrst uvwx' \
+  -H 'Content-Type: application/json' \
+  -d '{"order_id":34183,"tracking_number":"1Z50W72W0115498880","carrier":"ups","line_item_ids":[4711]}'
+
+curl -s 'https://fishotel.com/wp-json/fst/v1/order/34183/shipments' -u 'jeff:abcd efgh ijkl mnop qrst uvwx'
+```
+
+**`GET /order/{id}/shipments`** returns `order` (`id`, `number`, `status`, `is_fulfillment`, `source_order_ids` = where a POST fans out to), `line_items[]` (`id`, `name`, `quantity`, `covered`), `fully_shipped` (null for fulfillments — coverage lives on the sources), `shipments[]` (row columns minus `tracking_data`, with `line_item_ids` decoded, `status_label`, `tracking_url`) and `source_orders[]` (fulfillments only, one per `source_order_ids` entry: `id`, `number`, `status`, `line_items[]` with `covered`, `fully_shipped`, `shipments[]` — all from that source's own rows; these are the ids a POST needs).
+
+#### For the label skill: POST the tracking here instead of driving the admin screen
+
+The Finiship label skill's "save tracking on the order" step should not fill the order-edit meta box in a browser any more. Flow: `GET /order/{id}/shipments` → pick the uncovered `line_items[].id` for this box; for a fulfillment order pick the uncovered ids from every `source_orders[].line_items[]` that are in the box (never the fulfillment's own ids), and omit `line_item_ids` only when the box holds every item of every source → `POST /shipment` with `carrier: "ups"` → confirm `shipment_ids` is non-empty and `order_statuses[id] === "shipped"` in the 201 body — for a fulfillment, each fully-boxed source is `"shipped"` and a partially boxed source stays `"processing"` (a 409 means it was already saved). Keep the application password in the device credential store / an env var, never in the skill file.
 
 The public `/track` endpoint validates order number + billing email and returns the same error for missing orders and email mismatches to prevent order enumeration.
 

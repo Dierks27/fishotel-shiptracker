@@ -244,6 +244,12 @@ class FST_Order {
 
     /**
      * AJAX: Add tracking to an order.
+     *
+     * Thin wrapper around add_tracking(). The POST field names (order_id,
+     * tracking_number, carrier, line_item_ids[]) and the payload shape
+     * (string error message / success data with `message`) are the contract
+     * the plugin's own meta box AND the theme's "Shipments" box rely on —
+     * keep them stable. Sanitisation happens in normalize_add_tracking_args().
      */
     public function ajax_add_tracking() {
         check_ajax_referer( 'fst_nonce', 'nonce' );
@@ -252,21 +258,127 @@ class FST_Order {
             wp_send_json_error( 'Permission denied.' );
         }
 
-        $order_id        = isset( $_POST['order_id'] ) ? absint( $_POST['order_id'] ) : 0;
-        $tracking_number = isset( $_POST['tracking_number'] ) ? sanitize_text_field( $_POST['tracking_number'] ) : '';
-        $carrier         = isset( $_POST['carrier'] ) ? sanitize_text_field( $_POST['carrier'] ) : 'auto';
-        $line_item_ids   = isset( $_POST['line_item_ids'] )
-            ? array_values( array_unique( array_filter( array_map( 'absint', (array) $_POST['line_item_ids'] ) ) ) )
-            : array();
-
-        if ( ! $order_id || empty( $tracking_number ) ) {
-            wp_send_json_error( 'Order ID and tracking number are required.' );
+        $args = array();
+        foreach ( array( 'order_id', 'tracking_number', 'carrier', 'line_item_ids' ) as $field ) {
+            if ( isset( $_POST[ $field ] ) ) {
+                $args[ $field ] = $_POST[ $field ]; // phpcs:ignore WordPress.Security -- sanitised by normalize_add_tracking_args().
+            }
         }
 
-        // Auto-detect carrier if needed.
-        if ( 'auto' === $carrier ) {
+        $result = $this->add_tracking( $args );
+
+        if ( is_wp_error( $result ) ) {
+            wp_send_json_error( $result->get_error_message() );
+        }
+
+        wp_send_json_success( $result );
+    }
+
+    /**
+     * Normalise and validate the arguments for add_tracking().
+     *
+     * Pure: no database or WooCommerce access, so it is unit-tested without
+     * WordPress (tests/add-tracking-args-test.php). Applies exactly the
+     * sanitisation the AJAX handler has always applied, plus the optional
+     * `ship_date` the REST endpoint accepts.
+     *
+     * @param array $args {
+     *     @type int|string   $order_id        Order ID (the order number shown in admin).
+     *     @type string       $tracking_number Carrier tracking number.
+     *     @type string       $carrier         'auto' (default / empty), 'ups' or 'usps'.
+     *     @type int[]|string $line_item_ids   WC_Order_Item IDs in this box — array, or a
+     *                                         comma-separated string for form-encoded callers.
+     *     @type string       $ship_date       Optional Y-m-d. Null means "now" at create time.
+     * }
+     * @return array|WP_Error Normalised args, or WP_Error with code
+     *                        `fst_missing_args` or `fst_invalid_ship_date`.
+     */
+    public static function normalize_add_tracking_args( array $args ) {
+        $order_id        = isset( $args['order_id'] ) && is_scalar( $args['order_id'] ) ? absint( $args['order_id'] ) : 0;
+        $tracking_number = isset( $args['tracking_number'] ) && is_scalar( $args['tracking_number'] )
+            ? sanitize_text_field( (string) $args['tracking_number'] )
+            : '';
+        $carrier         = isset( $args['carrier'] ) && is_scalar( $args['carrier'] )
+            ? sanitize_text_field( (string) $args['carrier'] )
+            : 'auto';
+
+        $raw_items = isset( $args['line_item_ids'] ) ? $args['line_item_ids'] : array();
+        if ( is_string( $raw_items ) ) {
+            // "12,15" convenience for form-encoded / CLI callers. The admin
+            // meta boxes always send a real line_item_ids[] array.
+            $raw_items = '' === trim( $raw_items ) ? array() : explode( ',', $raw_items );
+        }
+        $line_item_ids = array();
+        foreach ( (array) $raw_items as $raw_id ) {
+            $line_item_ids[] = is_scalar( $raw_id ) ? absint( $raw_id ) : 0;
+        }
+        $line_item_ids = array_values( array_unique( array_filter( $line_item_ids ) ) );
+
+        // empty() on purpose (not '' ===): the pre-1.9.16 AJAX guard used it,
+        // so a literal "0" has always been rejected here. Keep it that way.
+        if ( ! $order_id || empty( $tracking_number ) ) {
+            return new WP_Error( 'fst_missing_args', 'Order ID and tracking number are required.' );
+        }
+
+        // Auto-detect carrier if needed (an empty carrier counts as auto).
+        if ( 'auto' === $carrier || '' === $carrier ) {
             $carrier = FST_Carrier::detect_carrier( $tracking_number );
         }
+
+        $ship_date = null;
+        if ( isset( $args['ship_date'] ) && is_scalar( $args['ship_date'] ) && '' !== trim( (string) $args['ship_date'] ) ) {
+            $raw_date = trim( (string) $args['ship_date'] );
+            if ( ! preg_match( '/^(\d{4})-(\d{2})-(\d{2})$/', $raw_date, $m )
+                 || ! checkdate( (int) $m[2], (int) $m[3], (int) $m[1] ) ) {
+                return new WP_Error( 'fst_invalid_ship_date', 'ship_date must be a valid date in Y-m-d format.' );
+            }
+            $ship_date = $raw_date . ' 00:00:00';
+        }
+
+        return array(
+            'order_id'        => $order_id,
+            'tracking_number' => $tracking_number,
+            'carrier'         => $carrier,
+            'line_item_ids'   => $line_item_ids,
+            'ship_date'       => $ship_date,
+        );
+    }
+
+    /**
+     * Add a tracking number to an order — the service behind the admin meta
+     * box (ajax_add_tracking) and POST /fst/v1/shipment.
+     *
+     * Does everything the admin path does: fulfillment fan-out to source
+     * orders, per-source line_item_ids coverage, same-order duplicate check,
+     * carrier auto-detect, EasyPost routing / first carrier poll, order notes
+     * and the Processing → Shipped transition.
+     *
+     * @param array $args See normalize_add_tracking_args().
+     * @return array|WP_Error {
+     *     @type string $message           Human-readable summary (what the meta box shows).
+     *     @type int    $shipment_id       First created shipment id.
+     *     @type int[]  $shipment_ids      Every created shipment id (one per target order).
+     *     @type int[]  $skipped_order_ids Source orders skipped because none of the selected items belong to them.
+     *     @type int[]  $failed_order_ids  Target orders whose row insert failed.
+     *     @type string $carrier           Resolved carrier slug.
+     *     @type array  $shipments         Per-shipment summary after the first poll / EasyPost registration.
+     *     @type array  $order_statuses    order_id => WooCommerce status after the transition.
+     * }
+     * Error codes: fst_missing_args, fst_invalid_ship_date, fst_no_items,
+     * fst_nothing_added (bad input), fst_order_not_found, fst_duplicate_tracking,
+     * fst_create_failed. Messages are the ones the admin meta box shows.
+     */
+    public function add_tracking( array $args ) {
+        $normalized = self::normalize_add_tracking_args( $args );
+        if ( is_wp_error( $normalized ) ) {
+            return $normalized;
+        }
+
+        $order_id        = $normalized['order_id'];
+        $tracking_number = $normalized['tracking_number'];
+        $carrier         = $normalized['carrier'];
+        $line_item_ids   = $normalized['line_item_ids'];
+        $ship_date       = $normalized['ship_date'] ? $normalized['ship_date'] : current_time( 'mysql' );
 
         // Regular (non-fulfillment) orders must POST an explicit line_item_ids[]
         // subset from the meta-box checkboxes. Without that guard, mixed orders
@@ -282,13 +394,14 @@ class FST_Order {
         // still need to fan tracking out to source orders.
         $is_fulfillment   = $submitting_order && '1' === (string) $submitting_order->get_meta( '_fishotel_is_fulfillment' );
         if ( ! $is_fulfillment && empty( $line_item_ids ) ) {
-            wp_send_json_error( 'Please select at least one item in this shipment.' );
+            return new WP_Error( 'fst_no_items', 'Please select at least one item in this shipment.' );
         }
 
         // Fan out to source orders when this is a fulfillment order.
+        // resolve_target_order_ids() is empty only when the order doesn't exist.
         $target_order_ids = $this->resolve_target_order_ids( $order_id );
         if ( empty( $target_order_ids ) ) {
-            wp_send_json_error( 'Could not resolve target order(s).' );
+            return new WP_Error( 'fst_order_not_found', 'Could not resolve target order(s).' );
         }
 
         $shipment_ids = array();
@@ -359,7 +472,7 @@ class FST_Order {
                 'tracking_number' => $tracking_number,
                 'carrier'         => $carrier,
                 'status'          => 'unknown',
-                'ship_date'       => current_time( 'mysql' ),
+                'ship_date'       => $ship_date,
                 'line_item_ids'   => ! empty( $items_for_this_order ) ? wp_json_encode( $items_for_this_order ) : null,
             ) );
 
@@ -400,11 +513,12 @@ class FST_Order {
 
         if ( empty( $shipment_ids ) ) {
             if ( ! empty( $failures ) ) {
-                wp_send_json_error( 'Failed to save tracking data.' );
+                return new WP_Error( 'fst_create_failed', 'Failed to save tracking data.' );
             }
-            wp_send_json_error( ! empty( $skipped )
-                ? 'None of the selected items belong to the target order(s). No tracking was added.'
-                : 'This tracking number is already on this order.' );
+            if ( ! empty( $skipped ) ) {
+                return new WP_Error( 'fst_nothing_added', 'None of the selected items belong to the target order(s). No tracking was added.' );
+            }
+            return new WP_Error( 'fst_duplicate_tracking', 'This tracking number is already on this order.' );
         }
 
         // Register / poll each newly created shipment.
@@ -412,15 +526,189 @@ class FST_Order {
             $this->poll_or_register_shipment( $sid, $carrier, $tracking_number );
         }
 
-        wp_send_json_success( array(
-            'message'      => count( $shipment_ids ) > 1
+        // Post-poll snapshot so API callers can confirm the save without a
+        // second request: each row's status and each target order's status.
+        $shipments      = array();
+        $order_statuses = array();
+        foreach ( $shipment_ids as $sid ) {
+            $row = FST_Shipment::get( $sid );
+            if ( ! $row ) {
+                continue;
+            }
+            $shipments[] = $this->summarize_shipment( $row );
+
+            $target_order = wc_get_order( $row->order_id );
+            if ( $target_order ) {
+                $order_statuses[ (int) $row->order_id ] = $target_order->get_status();
+            }
+        }
+
+        return array(
+            'message'           => count( $shipment_ids ) > 1
                 ? sprintf( 'Tracking added to %d source orders.', count( $shipment_ids ) )
                 : 'Tracking added successfully!',
-            'shipment_id'  => $shipment_ids[0],
-            'shipment_ids' => $shipment_ids,
+            'shipment_id'       => $shipment_ids[0],
+            'shipment_ids'      => $shipment_ids,
             'skipped_order_ids' => $skipped,
-            'carrier'      => $carrier,
-        ) );
+            'failed_order_ids'  => $failures,
+            'carrier'           => $carrier,
+            'shipments'         => $shipments,
+            'order_statuses'    => $order_statuses,
+        );
+    }
+
+    /**
+     * API-friendly view of one wp_fst_shipments row: the row's own columns
+     * minus the raw tracking_data blob, with `line_item_ids` decoded to an
+     * int array (NULL stays NULL = covers every item of order_id), plus the
+     * status label and carrier tracking URL. The DB row shape is untouched.
+     *
+     * @param object $row Shipment row (stdClass from FST_Shipment).
+     * @return array
+     */
+    public function summarize_shipment( $row ) {
+        $line_item_ids = null;
+        if ( ! empty( $row->line_item_ids ) ) {
+            $decoded = json_decode( $row->line_item_ids, true );
+            if ( is_array( $decoded ) ) {
+                $line_item_ids = array_values( array_map( 'absint', $decoded ) );
+            }
+        }
+
+        return array(
+            'id'               => (int) $row->id,
+            'order_id'         => (int) $row->order_id,
+            'tracking_number'  => $row->tracking_number,
+            'carrier'          => $row->carrier,
+            'tracking_url'     => $this->get_carrier_url( $row ),
+            'status'           => $row->status,
+            'status_label'     => FST_Carrier::get_status_label( $row->status ),
+            'status_detail'    => isset( $row->status_detail ) ? $row->status_detail : '',
+            'tracker_provider' => isset( $row->tracker_provider ) ? $row->tracker_provider : '',
+            'line_item_ids'    => $line_item_ids,
+            'ship_date'        => isset( $row->ship_date ) ? $row->ship_date : null,
+            'est_delivery'     => isset( $row->est_delivery ) ? $row->est_delivery : null,
+            'delivered_date'   => isset( $row->delivered_date ) ? $row->delivered_date : null,
+            'last_checked'     => isset( $row->last_checked ) ? $row->last_checked : null,
+            'created_at'       => isset( $row->created_at ) ? $row->created_at : null,
+            'updated_at'       => isset( $row->updated_at ) ? $row->updated_at : null,
+        );
+    }
+
+    /**
+     * Describe an order's effective shipments and line-item coverage — what
+     * GET /fst/v1/order/{id}/shipments returns so a caller (the label skill)
+     * can pick the line_item_ids to POST and then confirm the save.
+     *
+     * Reuses get_effective_shipments(): a fulfillment order with no direct
+     * rows fans IN from its source orders, deduped by tracking number.
+     *
+     * For a fulfillment order the payload also carries `source_orders[]`:
+     * each source's own line items and coverage. Order item ids are globally
+     * unique, so the fulfillment's own `line_items[]` can never be POSTed
+     * (add_tracking() intersects the posted ids with each SOURCE's items and
+     * skips sources with no match). Without the source items a REST caller
+     * could only omit line_item_ids, which stores a covers-all row on every
+     * source and flips a source to Shipped while part of it is still in QT —
+     * the theme meta box avoids that by posting the source item ids, and
+     * this is what lets an API caller do the same.
+     *
+     * @param int $order_id
+     * @return array|WP_Error {
+     *     @type array      $order         id, number, status, is_fulfillment, source_order_ids
+     *                                     (where POST /shipment fans out to; empty for regular orders).
+     *     @type array      $line_items    [ { id, name, quantity, covered } ] — `covered` = some shipment
+     *                                     lists the item explicitly. Fulfillment items never match
+     *                                     (coverage lives on the source orders).
+     *     @type bool|null  $fully_shipped Every line item covered (regular orders); null for fulfillments.
+     *     @type array      $shipments     summarize_shipment() rows.
+     *     @type array      $source_orders Fulfillments only, one per source_order_ids entry:
+     *                                     { id, number, status, line_items[], fully_shipped, shipments[] }
+     *                                     computed from that source's OWN rows. Empty for regular orders.
+     * }
+     */
+    public function describe_order_shipments( $order_id ) {
+        $order_id = absint( $order_id );
+        $order    = $order_id ? wc_get_order( $order_id ) : false;
+        if ( ! $order instanceof WC_Order ) {
+            return new WP_Error( 'fst_order_not_found', 'Order not found.' );
+        }
+
+        $is_fulfillment = '1' === (string) $order->get_meta( '_fishotel_is_fulfillment' );
+        $shipments      = $this->get_effective_shipments( $order_id );
+
+        $source_order_ids = array();
+        $source_orders    = array();
+        if ( $is_fulfillment ) {
+            $source_order_ids = array_values( array_diff( $this->resolve_target_order_ids( $order_id ), array( $order_id ) ) );
+
+            foreach ( $source_order_ids as $source_id ) {
+                $source = wc_get_order( $source_id );
+                if ( ! $source instanceof WC_Order ) {
+                    continue;
+                }
+                // Direct rows only: the write side (add_tracking,
+                // is_order_fully_shipped) looks at rows owned by the source.
+                $source_rows     = (array) FST_Shipment::get_by_order( $source_id );
+                $source_orders[] = array(
+                    'id'            => $source->get_id(),
+                    'number'        => (string) $source->get_order_number(),
+                    'status'        => $source->get_status(),
+                    'line_items'    => $this->describe_line_items( $source, $source_rows ),
+                    'fully_shipped' => $this->is_order_fully_shipped( $source ),
+                    'shipments'     => array_map( array( $this, 'summarize_shipment' ), $source_rows ),
+                );
+            }
+        }
+
+        return array(
+            'order'         => array(
+                'id'               => $order->get_id(),
+                'number'           => (string) $order->get_order_number(),
+                'status'           => $order->get_status(),
+                'is_fulfillment'   => $is_fulfillment,
+                'source_order_ids' => $source_order_ids,
+            ),
+            'line_items'    => $this->describe_line_items( $order, $shipments ),
+            'fully_shipped' => $is_fulfillment ? null : $this->is_order_fully_shipped( $order ),
+            'shipments'     => array_map( array( $this, 'summarize_shipment' ), (array) $shipments ),
+            'source_orders' => $source_orders,
+        );
+    }
+
+    /**
+     * Line items of $order with `covered` = some row in $shipments lists the
+     * item explicitly in its line_item_ids (a NULL list never covers here,
+     * same rule as is_order_fully_shipped() and the meta-box picker).
+     *
+     * @param WC_Order   $order
+     * @param array|null $shipments Shipment rows (stdClass) to compute coverage from.
+     * @return array [ { id, name, quantity, covered } ]
+     */
+    private function describe_line_items( $order, $shipments ) {
+        $covered_item_ids = array();
+        foreach ( (array) $shipments as $row ) {
+            if ( empty( $row->line_item_ids ) ) {
+                continue;
+            }
+            $ids = json_decode( $row->line_item_ids, true );
+            if ( is_array( $ids ) ) {
+                $covered_item_ids = array_merge( $covered_item_ids, array_map( 'absint', $ids ) );
+            }
+        }
+        $covered_item_ids = array_unique( $covered_item_ids );
+
+        $line_items = array();
+        foreach ( $order->get_items() as $item_id => $item ) {
+            $line_items[] = array(
+                'id'       => (int) $item_id,
+                'name'     => $item->get_name(),
+                'quantity' => (int) $item->get_quantity(),
+                'covered'  => in_array( (int) $item_id, $covered_item_ids, true ),
+            );
+        }
+
+        return $line_items;
     }
 
     /**
@@ -543,10 +831,12 @@ class FST_Order {
      * Kill switch: `define( 'FST_FULFILLMENT_DISPLAY_AGGREGATION_OFF', true )`
      * disables the fan-in and falls back to direct lookup.
      *
+     * Public so the REST layer (describe_order_shipments) can reuse it.
+     *
      * @param int $order_id
      * @return array Shipment rows (stdClass) to display.
      */
-    private function get_effective_shipments( $order_id ) {
+    public function get_effective_shipments( $order_id ) {
         $shipments = FST_Shipment::get_by_order( $order_id );
 
         // Direct shipments win — short-circuit. Also short-circuits the kill
