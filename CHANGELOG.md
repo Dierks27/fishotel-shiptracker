@@ -2,6 +2,17 @@
 
 All notable changes to FisHotel ShipTracker will be documented in this file.
 
+## [1.9.16]
+
+- Extracted the body of `ajax_add_tracking()` into `FST_Order::add_tracking( array $args )` (returns array|`WP_Error`). The AJAX handler is now a thin `$_POST` wrapper around it — same field names, same string error messages, same success payload (now also carrying `failed_order_ids`, per-shipment `shipments[]` summaries and `order_statuses{}`), so the plugin meta box and the theme's Shipments box behave exactly as before.
+- New pure `FST_Order::normalize_add_tracking_args()` (order id, tracking number, carrier auto-detect, `line_item_ids` sanitisation incl. comma-separated strings, optional `ship_date` Y-m-d) with a WordPress-free test: `php tests/add-tracking-args-test.php`.
+- `POST /fst/v1/shipment` now calls that service instead of inserting a bare row, so API callers get fulfillment fan-out, line-item coverage, the same-order duplicate check, carrier auto-detect, EasyPost routing / first poll, order notes and the Processing → Shipped transition. Params are schema-validated (`carrier` enum `auto|ups|usps`, `line_item_ids` int array, optional `ship_date`). Returns 201 with the service result, or `{error, code}` mapped to 400 / 404 (`fst_order_not_found`) / 409 (`fst_duplicate_tracking`) with the admin's messages. Note: the old endpoint rejected a tracking number that existed on *any* order; the duplicate check is now per order, matching the admin and the combined-box fan-out.
+- New `GET /fst/v1/order/{id}/shipments` (admin): effective shipments via `get_effective_shipments()` (now public) plus line-item coverage, `fully_shipped` and, for fulfillments, `source_order_ids`, so the label skill can pick `line_item_ids` and confirm the save.
+- For a fulfillment order that endpoint also returns `source_orders[]` — each source's own `line_items[]` with `covered`, `fully_shipped` and `shipments[]` — because order item ids are globally unique: the fulfillment's own ids never match a source (every source is skipped, `fst_nothing_added`), and omitting `line_item_ids` stores a covers-all row on every source, flipping a partly boxed source to Shipped. README/CLAUDE.md now tell API callers to POST the uncovered source item ids and to omit `line_item_ids` only when the box holds every item of every source.
+- `normalize_add_tracking_args()` rejects a tracking number of `"0"` again (`empty()` semantics, as the AJAX guard always had); the extraction had loosened it to `'' ===`. Covered by the plain-PHP test.
+- README: the `rest_invalid_param` row notes that it is WordPress's schema envelope (`code`/`message`/`data.params`), not the plugin's `{error, code}`.
+- Verified Application Password (HTTP Basic over HTTPS) auth works with `admin_check()` — nothing in the plugin blocks cookie-less REST auth. README.md and CLAUDE.md document both endpoints with curl examples and a "For the label skill" section.
+
 ## [1.9.15]
 
 - Fan-out no longer creates a "covers all items" row on a fulfillment source order that has nothing in the posted `line_item_ids[]` box. That untouched sibling was being emailed "shipped", auto-completed on delivery and blocked from its own tracking later. The skipped sources are named in an order note on the fulfillment; the submitting fulfillment order itself is exempt so the fan-out kill switch still lands tracking on it directly.
