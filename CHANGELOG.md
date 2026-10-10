@@ -2,6 +2,14 @@
 
 All notable changes to FisHotel ShipTracker will be documented in this file.
 
+## [1.9.15]
+
+- Fan-out no longer creates a "covers all items" row on a fulfillment source order that has nothing in the posted `line_item_ids[]` box. That untouched sibling was being emailed "shipped", auto-completed on delivery and blocked from its own tracking later. The skipped sources are named in an order note on the fulfillment; the submitting fulfillment order itself is exempt so the fan-out kill switch still lands tracking on it directly.
+- EasyPost webhooks now update every `wp_fst_shipments` row sharing the tracker (fan-out siblings), including siblings whose own tracker registration failed, so each source order gets its status, events, emails and auto-complete. Admin email deduplicated to one per webhook.
+- Monotonic status guard on the webhook and the direct poll: an older or replayed payload cannot regress a row, and a terminal status (delivered, return to sender, failure) never moves back. An `unknown` payload is ignored once a real status has been recorded (no second "shipped" email on promotion or backfill), and keeps the stored status detail.
+- Status Actions and auto-complete no longer flip refunded, cancelled or failed orders to Shipped/Completed; an order note records the skipped transition.
+- Public `/fst/v1/track` returns the generic not-found error instead of an HTTP 500 when the order number resolves to a refund.
+
 ## [1.9.14]
 
 - Fulfillment detection now uses the `_fishotel_is_fulfillment` post meta instead of `'fulfillment' === $order->get_status()`. The theme sets the meta to `'1'` on creation and it stays put, but the order status can be flipped past Fulfillment (Shipped, Processing after manual revert, Completed) — when that happened, `ajax_add_tracking` mis-classified the order as regular, rendered the picker for fulfillment items, and saved the shipment on the fulfillment row directly with empty `line_item_ids` instead of fanning out to source orders. Updated the three status-based checks in `class-fst-order.php` (meta-box picker render, `ajax_add_tracking` validation, and `resolve_target_order_ids` fan-out gate).

@@ -215,32 +215,84 @@ class FST_EasyPost {
         $tracker_id    = isset( $tracker['id'] ) ? $tracker['id'] : '';
         $tracking_code = isset( $tracker['tracking_code'] ) ? $tracker['tracking_code'] : '';
 
-        // Find the shipment by tracker id, falling back to tracking number.
-        $shipment = null;
+        // Find EVERY shipment row for this tracker, falling back to tracking
+        // number (+ carrier when the payload's carrier maps to one of ours).
+        // WHY (shiptracker-2): fulfillment fan-out creates one row per source
+        // order, all sharing the tracking number / tracker id, and the cron
+        // poll skips EasyPost rows — so a single-row lookup left every sibling
+        // stale forever (no status, no emails, no auto-complete).
+        $shipments = array(); // keyed by row id so the two lookups de-dupe
         if ( $tracker_id ) {
-            $shipment = FST_Shipment::get_by_easypost_tracker( $tracker_id );
+            foreach ( FST_Shipment::get_all_by_easypost_tracker( $tracker_id ) as $row ) {
+                $shipments[ (int) $row->id ] = $row;
+            }
         }
-        if ( ! $shipment && $tracking_code ) {
-            $shipment = FST_Shipment::get_by_tracking( $tracking_code );
+        if ( $tracking_code ) {
+            // WHY (shiptracker-2 polish): ALWAYS union in the tracking-number
+            // siblings that are not bound to any tracker yet — not only when the
+            // tracker-id lookup came back empty. A fan-out sibling whose own
+            // create_tracker() failed (timeout / 5xx, or a backfill error) keeps
+            // an empty easypost_tracker_id; once any other sibling was bound,
+            // the "fallback only on zero rows" rule left that row stale forever
+            // (cron only self-heals it on a direct USPS 403, which never fires
+            // on an EasyPost-only install with no USPS credentials). The loop
+            // below stamps the tracker id on it so later webhooks resolve it
+            // directly. With no tracker-id match at all, the original full
+            // tracking-number fallback still applies.
+            $carrier_slug = isset( $tracker['carrier'] ) ? self::unmap_carrier( $tracker['carrier'] ) : '';
+            $bound_any    = ! empty( $shipments );
+            foreach ( FST_Shipment::get_all_by_tracking( $tracking_code, $carrier_slug ) as $row ) {
+                if ( ! $bound_any || '' === (string) $row->easypost_tracker_id ) {
+                    $shipments[ (int) $row->id ] = $row;
+                }
+            }
         }
 
-        if ( ! $shipment ) {
+        if ( empty( $shipments ) ) {
             self::log( sprintf( 'Webhook: no shipment for tracker %s / code %s', $tracker_id, $tracking_code ) );
             return new WP_Error( 'fst_easypost_no_shipment', 'No matching shipment found for this tracker.' );
         }
 
-        // If we matched by tracking number, backfill the tracker id so future
-        // webhooks resolve directly.
-        if ( empty( $shipment->easypost_tracker_id ) && $tracker_id ) {
-            FST_Shipment::update( $shipment->id, array(
-                'easypost_tracker_id' => $tracker_id,
-                'tracker_provider'    => 'easypost',
-            ) );
-            $shipment->easypost_tracker_id = $tracker_id;
-            $shipment->tracker_provider    = 'easypost';
+        // One admin email per webhook, not one per sibling row: the admin
+        // cares that tracking X reached status Y, not how many source orders
+        // share the box. Customer emails stay per row (different customers,
+        // and the theme's consolidation filter already de-dupes those).
+        // Priority 999 so earlier filters' decisions are respected.
+        $admin_sent  = false;
+        $admin_guard = static function ( $send ) use ( &$admin_sent ) {
+            if ( ! $send ) {
+                return $send;
+            }
+            if ( $admin_sent ) {
+                return false;
+            }
+            $admin_sent = true;
+            return true;
+        };
+        add_filter( 'fst_send_admin_email', $admin_guard, 999 );
+
+        $result = true;
+        foreach ( $shipments as $shipment ) {
+            // If we matched by tracking number, backfill the tracker id so future
+            // webhooks resolve directly.
+            if ( empty( $shipment->easypost_tracker_id ) && $tracker_id ) {
+                FST_Shipment::update( $shipment->id, array(
+                    'easypost_tracker_id' => $tracker_id,
+                    'tracker_provider'    => 'easypost',
+                ) );
+                $shipment->easypost_tracker_id = $tracker_id;
+                $shipment->tracker_provider    = 'easypost';
+            }
+
+            $applied = self::apply_tracker_to_shipment( $shipment, $tracker );
+            if ( is_wp_error( $applied ) ) {
+                $result = $applied;
+            }
         }
 
-        return self::apply_tracker_to_shipment( $shipment, $tracker );
+        remove_filter( 'fst_send_admin_email', $admin_guard, 999 );
+
+        return $result;
     }
 
     /**
@@ -262,6 +314,54 @@ class FST_EasyPost {
         $old_status = $shipment->status;
         $new_status = self::map_status( isset( $tracker['status'] ) ? $tracker['status'] : '' );
 
+        // Build events from tracking_details.
+        $events            = self::parse_tracking_details( $tracker );
+        $latest_event_time = '';
+        foreach ( $events as $event ) {
+            if ( ! empty( $event['event_time'] ) && $event['event_time'] > $latest_event_time ) {
+                $latest_event_time = $event['event_time'];
+            }
+        }
+
+        // Regression guards. When one trips we still bump last_checked /
+        // check_count and persist any events we don't have yet, but leave
+        // status, status_detail, tracking_data and last_event_at alone and
+        // fire no side effects (no emails, no order transitions).
+        $skip_reason = '';
+        $payload_ts  = '' !== $latest_event_time ? strtotime( $latest_event_time ) : false;
+        $stored_ts   = ! empty( $shipment->last_event_at ) ? strtotime( $shipment->last_event_at ) : false;
+
+        if ( 'unknown' === $new_status && 'unknown' !== $old_status ) {
+            // WHY (shiptracker-9): a freshly created tracker (promotion /
+            // backfill / registration) reports 'unknown' until EasyPost has
+            // fetched carrier data. Applying it flipped an in-flight row back
+            // to Unknown, and the next real update then re-fired the status
+            // change — and the "your order has shipped" email — a second time.
+            $skip_reason = 'payload status is unknown but row already has a status (' . $old_status . ')';
+        } elseif ( in_array( $old_status, FST_Carrier::TERMINAL_STATUSES, true )
+            && ! in_array( $new_status, FST_Carrier::TERMINAL_STATUSES, true ) ) {
+            // WHY (shiptracker-4): a terminal status never moves backwards. A
+            // retried or replayed webhook carrying an older state must not undo
+            // delivered / return_to_sender / failure or re-send those emails.
+            $skip_reason = 'row is terminal (' . $old_status . ') and payload is not (' . $new_status . ')';
+        } elseif ( $payload_ts && $stored_ts && $payload_ts < $stored_ts ) {
+            // WHY (shiptracker-4): EasyPost retries failed deliveries and can
+            // deliver webhooks out of order. A payload whose newest event is
+            // older than what we already stored is stale: applying it would
+            // regress the status and re-send the earlier status email.
+            $skip_reason = 'payload newest event ' . $latest_event_time . ' is older than stored ' . $shipment->last_event_at;
+        }
+
+        if ( '' !== $skip_reason ) {
+            self::log( sprintf( 'Ignoring EasyPost payload for %s (row %d): %s', $shipment->tracking_number, $shipment->id, $skip_reason ) );
+            FST_Shipment::update( $shipment->id, array(
+                'last_checked' => current_time( 'mysql' ),
+                'check_count'  => (int) $shipment->check_count + 1,
+            ) );
+            self::persist_events( $shipment->id, $events );
+            return true;
+        }
+
         $update = array(
             'status'        => $new_status,
             'status_detail' => isset( $tracker['status_detail'] ) ? sanitize_text_field( (string) $tracker['status_detail'] ) : '',
@@ -278,15 +378,6 @@ class FST_EasyPost {
             }
         }
 
-        // Build events from tracking_details.
-        $events            = self::parse_tracking_details( $tracker );
-        $latest_event_time = '';
-        foreach ( $events as $event ) {
-            if ( ! empty( $event['event_time'] ) && $event['event_time'] > $latest_event_time ) {
-                $latest_event_time = $event['event_time'];
-            }
-        }
-
         if ( '' !== $latest_event_time ) {
             $update['last_event_at'] = $latest_event_time;
         }
@@ -298,27 +389,7 @@ class FST_EasyPost {
 
         FST_Shipment::update( $shipment->id, $update );
 
-        // Persist new events, deduped by event_time.
-        if ( ! empty( $events ) ) {
-            $existing_times = array();
-            foreach ( FST_Shipment::get_events( $shipment->id ) as $ev ) {
-                $existing_times[] = $ev->event_time;
-            }
-
-            foreach ( $events as $event ) {
-                if ( ! empty( $event['event_time'] ) && ! in_array( $event['event_time'], $existing_times, true ) ) {
-                    FST_Shipment::add_event( array(
-                        'shipment_id' => $shipment->id,
-                        'status'      => $event['status'],
-                        'description' => $event['description'],
-                        'location'    => $event['location'],
-                        'event_time'  => $event['event_time'],
-                        'raw_data'    => wp_json_encode( $event['raw'] ),
-                    ) );
-                    $existing_times[] = $event['event_time'];
-                }
-            }
-        }
+        self::persist_events( $shipment->id, $events );
 
         // Fire status-change side effects only when the status actually changed.
         if ( $old_status !== $new_status ) {
@@ -388,6 +459,37 @@ class FST_EasyPost {
         ) );
 
         return $result;
+    }
+
+    /**
+     * Persist the events from a payload that we don't already have (deduped by event_time).
+     *
+     * @param int   $shipment_id
+     * @param array $events Parsed events from parse_tracking_details().
+     */
+    private static function persist_events( $shipment_id, $events ) {
+        if ( empty( $events ) ) {
+            return;
+        }
+
+        $existing_times = array();
+        foreach ( FST_Shipment::get_events( $shipment_id ) as $ev ) {
+            $existing_times[] = $ev->event_time;
+        }
+
+        foreach ( $events as $event ) {
+            if ( ! empty( $event['event_time'] ) && ! in_array( $event['event_time'], $existing_times, true ) ) {
+                FST_Shipment::add_event( array(
+                    'shipment_id' => $shipment_id,
+                    'status'      => $event['status'],
+                    'description' => $event['description'],
+                    'location'    => $event['location'],
+                    'event_time'  => $event['event_time'],
+                    'raw_data'    => wp_json_encode( $event['raw'] ),
+                ) );
+                $existing_times[] = $event['event_time'];
+            }
+        }
     }
 
     /**
@@ -473,6 +575,18 @@ class FST_EasyPost {
     private static function map_carrier( $slug ) {
         $slug = strtolower( trim( (string) $slug ) );
         return isset( self::CARRIER_MAP[ $slug ] ) ? self::CARRIER_MAP[ $slug ] : '';
+    }
+
+    /**
+     * Map an EasyPost carrier slug back to our internal slug.
+     *
+     * @param string $ep_carrier EasyPost carrier (e.g. 'USPS').
+     * @return string Internal slug, or '' if unmapped.
+     */
+    private static function unmap_carrier( $ep_carrier ) {
+        $needle = strtolower( trim( (string) $ep_carrier ) );
+        $slug   = array_search( $needle, array_map( 'strtolower', self::CARRIER_MAP ), true );
+        return is_string( $slug ) ? $slug : '';
     }
 
     /**
