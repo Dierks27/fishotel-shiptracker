@@ -293,6 +293,7 @@ class FST_Order {
 
         $shipment_ids = array();
         $failures     = array();
+        $skipped      = array();
 
         foreach ( $target_order_ids as $target_id ) {
             // Skip if this exact tracking# is already on this order (allows duplicates
@@ -317,6 +318,40 @@ class FST_Order {
                 } else {
                     $items_for_this_order = $source_item_ids;
                 }
+            }
+
+            // WHY (shiptracker-1): when an explicit item subset was posted and
+            // NONE of it belongs to this source order, nothing of this order is
+            // in the box. Creating a row anyway stored line_item_ids = NULL,
+            // which every reader (is_order_fully_delivered, the theme meta box
+            // and consolidated email) treats as "covers ALL items" — so the
+            // untouched sibling was emailed "shipped", auto-completed on
+            // delivery and blocked from adding its own tracking later. Skip it.
+            // With no subset posted at all (legacy / whole-box fan-out) the
+            // covers-all default above still applies.
+            //
+            // WHY (kill-switch exemption): with FST_FULFILLMENT_FANOUT_OFF /
+            // fst_fulfillment_fanout_enabled='0' the only target is the
+            // submitting fulfillment order itself, while the theme meta box
+            // still posts its SOURCE orders' item ids (order item ids are
+            // globally unique, so they never match F's own items). The guard
+            // above would then skip F too, leaving no row and an AJAX error.
+            // The documented fallback is "tracking lands on the fulfillment
+            // order_id directly" — keep that legacy covers-all (NULL) row.
+            $is_self_target = $is_fulfillment && (int) $target_id === (int) $order_id;
+            if ( ! empty( $line_item_ids ) && empty( $items_for_this_order ) && ! $is_self_target ) {
+                $skipped[] = $target_id;
+                if ( $is_fulfillment && $submitting_order ) {
+                    $submitting_order->add_order_note(
+                        sprintf(
+                            'ShipTracker: tracking %s not added to source order #%d — none of the selected items belong to it.',
+                            $tracking_number,
+                            $target_id
+                        ),
+                        false
+                    );
+                }
+                continue;
             }
 
             $shipment_id = FST_Shipment::create( array(
@@ -364,9 +399,12 @@ class FST_Order {
         }
 
         if ( empty( $shipment_ids ) ) {
-            wp_send_json_error( empty( $failures )
-                ? 'This tracking number is already on this order.'
-                : 'Failed to save tracking data.' );
+            if ( ! empty( $failures ) ) {
+                wp_send_json_error( 'Failed to save tracking data.' );
+            }
+            wp_send_json_error( ! empty( $skipped )
+                ? 'None of the selected items belong to the target order(s). No tracking was added.'
+                : 'This tracking number is already on this order.' );
         }
 
         // Register / poll each newly created shipment.
@@ -380,6 +418,7 @@ class FST_Order {
                 : 'Tracking added successfully!',
             'shipment_id'  => $shipment_ids[0],
             'shipment_ids' => $shipment_ids,
+            'skipped_order_ids' => $skipped,
             'carrier'      => $carrier,
         ) );
     }

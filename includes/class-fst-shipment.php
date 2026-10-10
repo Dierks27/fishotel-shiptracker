@@ -101,6 +101,51 @@ class FST_Shipment {
     }
 
     /**
+     * Get EVERY shipment row bound to an EasyPost tracker ID.
+     *
+     * WHY (shiptracker-2): fulfillment fan-out stores one row per source order,
+     * all sharing one tracking number and (EasyPost de-dupes trackers per
+     * tracking_code) one tracker id. The webhook has to update all of them.
+     *
+     * @param string $tracker_id
+     * @return array
+     */
+    public static function get_all_by_easypost_tracker( $tracker_id ) {
+        global $wpdb;
+        if ( empty( $tracker_id ) ) {
+            return array();
+        }
+        return $wpdb->get_results( $wpdb->prepare(
+            "SELECT * FROM " . self::table() . " WHERE easypost_tracker_id = %s ORDER BY id ASC", $tracker_id
+        ) );
+    }
+
+    /**
+     * Get EVERY shipment row for a tracking number, optionally scoped to a carrier.
+     *
+     * @param string $tracking_number
+     * @param string $carrier Optional internal carrier slug; '' matches any carrier.
+     * @return array
+     */
+    public static function get_all_by_tracking( $tracking_number, $carrier = '' ) {
+        global $wpdb;
+        if ( '' === (string) $tracking_number ) {
+            return array();
+        }
+        if ( '' !== (string) $carrier ) {
+            return $wpdb->get_results( $wpdb->prepare(
+                "SELECT * FROM " . self::table() . " WHERE tracking_number = %s AND carrier = %s ORDER BY id ASC",
+                $tracking_number,
+                $carrier
+            ) );
+        }
+        return $wpdb->get_results( $wpdb->prepare(
+            "SELECT * FROM " . self::table() . " WHERE tracking_number = %s ORDER BY id ASC",
+            $tracking_number
+        ) );
+    }
+
+    /**
      * Get non-terminal USPS shipments not yet registered with EasyPost.
      *
      * Used by the one-shot backfill that runs after upgrading to EasyPost support.

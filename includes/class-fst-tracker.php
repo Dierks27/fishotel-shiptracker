@@ -132,6 +132,19 @@ class FST_Tracker {
             $old_status = $shipment->status;
             $new_status = ! empty( $result['status'] ) ? $result['status'] : $old_status;
 
+            // WHY (shiptracker-9): carriers answer 'unknown' for unmapped or
+            // transient responses. Once a real status is on the row, treat
+            // 'unknown' as "no change" so the row never regresses and the next
+            // real update does not re-fire the status-change emails.
+            if ( 'unknown' === $new_status && 'unknown' !== $old_status ) {
+                $new_status = $old_status;
+                // Keep the stored detail too: an 'unknown' reply carries an
+                // empty/unmapped summary, and "In Transit" with a blank detail
+                // line is what the customer would otherwise see until the next
+                // good poll (mirrors the EasyPost skip path).
+                $result['status_detail'] = $shipment->status_detail;
+            }
+
             // Build update data.
             $update = array(
                 'status'        => $new_status,
@@ -232,6 +245,31 @@ class FST_Tracker {
         $status_actions = get_option( 'fst_status_actions', array() );
         $actions        = isset( $status_actions[ $new_status ] ) ? $status_actions[ $new_status ] : array();
 
+        // WHY (shiptracker-5): a refunded / cancelled / failed order must never
+        // be flipped to Shipped or Completed by a carrier event — that fires
+        // WooCommerce's "Completed order" email and hides the refund behind a
+        // Completed status. The shipment row update and customer tracking
+        // (emails, My Account) are kept; only the WC order status transitions
+        // below are skipped, with a note (when one would have run) so the
+        // admin can see why.
+        $order_closed = $order->has_status( array( 'refunded', 'cancelled', 'failed' ) );
+        if ( $order_closed ) {
+            $would_transition = ( ! empty( $actions['order_status'] ) && 'none' !== $actions['order_status'] )
+                || 'delivered' === $new_status;
+            if ( $would_transition ) {
+                $order->add_order_note(
+                    sprintf(
+                        'ShipTracker: shipment %s reached %s, but order is %s — order status left unchanged.',
+                        $shipment->tracking_number,
+                        FST_Carrier::get_status_label( $new_status ),
+                        $order->get_status()
+                    ),
+                    false
+                );
+                $this->log( sprintf( 'Order %d is %s: skipped status actions / auto-complete', $shipment->order_id, $order->get_status() ) );
+            }
+        }
+
         // Send customer email.
         if ( ! empty( $actions['email_customer'] ) ) {
             // Filter point so themes can suppress duplicates within a
@@ -252,7 +290,7 @@ class FST_Tracker {
         }
 
         // Change WooCommerce order status.
-        if ( ! empty( $actions['order_status'] ) && 'none' !== $actions['order_status'] ) {
+        if ( ! $order_closed && ! empty( $actions['order_status'] ) && 'none' !== $actions['order_status'] ) {
             $target_status = $actions['order_status'];
             $current       = $order->get_status();
 
@@ -304,7 +342,8 @@ class FST_Tracker {
         // and orders stayed at Shipped after every shipment delivered.
         // Coverage-guarded: multi-shipment orders only complete when every
         // line item is in a delivered shipment.
-        if ( 'delivered' === $new_status
+        if ( ! $order_closed
+             && 'delivered' === $new_status
              && '1' === (string) get_option( 'fst_auto_complete_orders', '1' )
              && $this->is_order_fully_delivered( $order )
              && 'completed' !== $order->get_status() ) {

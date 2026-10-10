@@ -166,7 +166,7 @@ class FST_REST_API {
         $order = wc_get_order( absint( $order_number ) );
 
         // If that didn't work, search by meta.
-        if ( ! $order ) {
+        if ( ! $order instanceof WC_Order ) {
             $orders = wc_get_orders( array(
                 'limit'  => 1,
                 'return' => 'objects',
@@ -180,7 +180,12 @@ class FST_REST_API {
             $order = ! empty( $orders ) ? $orders[0] : null;
         }
 
-        if ( ! $order ) {
+        // WHY (shiptracker-6): wc_get_order() returns a WC_Order_Refund for refund
+        // IDs (refunds share the order ID sequence) and that class has no
+        // get_billing_email(), so an anonymous POST with a refund id fatals
+        // (HTTP 500). Anything that is not a real order is simply "not found" —
+        // the same generic error as a missing order, so nothing is enumerable.
+        if ( ! $order instanceof WC_Order ) {
             return $not_found;
         }
 
