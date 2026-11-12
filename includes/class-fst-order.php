@@ -130,7 +130,7 @@ class FST_Order {
                                 $this->render_materials_inputs( $materials, $materials ? null : $this->suggest_box_materials( $shipment, $box ) );
                                 ?>
                                 <button type="button" class="button button-small fst-cost-save-btn" data-id="<?php echo esc_attr( $shipment->id ); ?>">
-                                    Save label cost
+                                    Save box costs
                                 </button>
                                 <span class="fst-cost-message" style="margin-left: 6px; font-size: 12px;"></span>
                             </div>

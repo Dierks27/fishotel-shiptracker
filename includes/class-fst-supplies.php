@@ -86,8 +86,8 @@ class FST_Supplies {
     // -----------------------------------------------------------------
 
     /**
-     * Read a quantity: 0 or more, at most two decimals. Nothing is rounded —
-     * "1.005 bags" is a typing slip, not 1.01.
+     * Read a quantity: 0 or more, at most two decimals, below a million.
+     * Nothing is rounded — "1.005 bags" is a typing slip, not 1.01.
      *
      * @param mixed $raw
      * @return int|null|false Whole hundredths, null when empty, false when
@@ -111,7 +111,9 @@ class FST_Supplies {
         if ( '' === $value ) {
             return null;
         }
-        if ( ! preg_match( '/^(\d{0,9})(?:\.(\d{0,2}))?$/', $value, $m ) ) {
+        // Six digits before the point: a quantity times a unit cost must
+        // stay a whole number of cents PHP can hold.
+        if ( ! preg_match( '/^(\d{0,6})(?:\.(\d{0,2}))?$/', $value, $m ) ) {
             return false;
         }
         $frac = isset( $m[2] ) ? $m[2] : '';
@@ -144,7 +146,8 @@ class FST_Supplies {
     }
 
     /**
-     * Read a unit cost: 0 or more, up to four decimals ("$0.1319").
+     * Read a unit cost: 0 or more, up to four decimals ("$0.1319"), below
+     * a million.
      *
      * @param mixed $raw
      * @return int|null|false Whole ten-thousandths of a dollar, null when
@@ -168,7 +171,7 @@ class FST_Supplies {
         if ( '' === $value ) {
             return '' === trim( (string) $raw ) ? null : false;
         }
-        if ( ! preg_match( '/^(\d{0,8})(?:\.(\d{0,4}))?$/', $value, $m ) ) {
+        if ( ! preg_match( '/^(\d{0,6})(?:\.(\d{0,4}))?$/', $value, $m ) ) {
             return false;
         }
         $frac = isset( $m[2] ) ? $m[2] : '';

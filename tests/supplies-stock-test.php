@@ -67,6 +67,11 @@ fst_assert_same( false, FST_Supplies::parse_qty( '1.005' ), 'more than two decim
 fst_assert_same( false, FST_Supplies::parse_qty( 1.005 ), 'also as a JSON number' );
 fst_assert_same( false, FST_Supplies::parse_qty( 'two' ), 'a word is refused' );
 fst_assert_same( false, FST_Supplies::parse_qty( array( 2 ) ), 'a list is refused' );
+fst_assert_same( 99999999, FST_Supplies::parse_qty( '999999.99' ), 'the largest quantity' );
+fst_assert_same( false, FST_Supplies::parse_qty( '1000000' ), 'a million is refused (a quantity times a price must stay whole cents)' );
+fst_assert_same( false, FST_Supplies::parse_rate( '1000000' ), 'and so is a unit cost of a million' );
+fst_assert_same( 1319, FST_Supplies::parse_rate( '$0.1319' ), 'a unit cost keeps four decimals' );
+fst_assert_same( 99999999, FST_Supplies::line_cents( 99999999, 10000 ), '999999.99 at 1.00 each is 999999.99' );
 fst_assert_same( '-2.50', FST_Supplies::format_qty( -250 ), 'a negative balance prints with its sign' );
 
 // ---------------------------------------------------------------------------

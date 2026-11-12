@@ -115,6 +115,19 @@ fst_assert_same(
     'a renamed supply keeps its id; a new one (or a row repeating an id) gets an id that was never used'
 );
 
+// A box renamed in a settings save takes its box supply along.
+$renamed = FST_Settings::renamed_boxes(
+    $standard_boxes,
+    array(
+        0 => array( 'name' => ' Small cube ' ), // Was "Small".
+        1 => array( 'name' => 'LARGE' ),        // Same name, other letter case: not a rename.
+        2 => array( 'name' => 'Brand new' ),    // A row that was just added.
+    )
+);
+fst_assert_same( array( 'small' => 'Small cube' ), $renamed, 'a saved box posted under its row number with another name was renamed' );
+fst_assert_same( array(), FST_Settings::renamed_boxes( $standard_boxes, array( 1 => array( 'name' => 'Large' ) ) ), 'a row that was removed (not posted) is not a rename' );
+fst_assert_same( array(), FST_Settings::renamed_boxes( $standard_boxes, array( 0 => array( 'name' => '' ), 1 => array( 'name' => array( 'x' ) ) ) ), 'nor is a row emptied or mangled' );
+
 $fst_test_options['fst_supplies']       = $supplies;
 $fst_test_options['fst_supply_last_id'] = $clean['last_id'];
 

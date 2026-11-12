@@ -119,6 +119,34 @@ class FST_Settings {
     }
 
     /**
+     * Standard boxes that were renamed by a settings save — pure.
+     *
+     * The form posts every box under the row number it was shown with, so a
+     * saved box whose posted name differs was renamed (not removed and
+     * re-added). Its box supply follows the new name instead of silently
+     * losing its box.
+     *
+     * @param array $saved_boxes  The boxes as saved before this save, in list order.
+     * @param array $posted_boxes The submitted rows, by row number.
+     * @return array Old name (lower case) => new name.
+     */
+    public static function renamed_boxes( array $saved_boxes, array $posted_boxes ) {
+        $renamed = array();
+
+        foreach ( array_values( $saved_boxes ) as $index => $saved_box ) {
+            if ( ! isset( $posted_boxes[ $index ]['name'] ) || ! is_scalar( $posted_boxes[ $index ]['name'] ) ) {
+                continue;
+            }
+            $posted = FST_Label_Cost::limit_length( sanitize_text_field( (string) $posted_boxes[ $index ]['name'] ), 40 );
+            if ( '' !== $posted && FST_Label_Cost::lower( $posted ) !== FST_Label_Cost::lower( $saved_box['name'] ) ) {
+                $renamed[ FST_Label_Cost::lower( $saved_box['name'] ) ] = $posted;
+            }
+        }
+
+        return $renamed;
+    }
+
+    /**
      * A flat amount of a standard box (foam cost, paper cost): money of 0 or
      * more, "0.00" when empty or not an amount.
      *
@@ -1581,12 +1609,25 @@ class FST_Settings {
         $sources = isset( $_POST['fst_label_sources'] ) && is_array( $_POST['fst_label_sources'] ) ? wp_unslash( $_POST['fst_label_sources'] ) : array();
         // phpcs:enable
 
+        $renamed = self::renamed_boxes( self::get_standard_boxes(), $boxes );
+
         update_option( 'fst_standard_boxes', self::sanitize_standard_boxes( $boxes ) );
         update_option( 'fst_label_sources', self::sanitize_label_sources( $sources ) );
 
         // Supplies — after the boxes, because a box supply is tied to one of them by name.
         // phpcs:ignore WordPress.Security.ValidatedSanitizedInput -- sanitised row by row in FST_Supplies::sanitize_supplies().
         $supplies = isset( $_POST['fst_supplies'] ) && is_array( $_POST['fst_supplies'] ) ? wp_unslash( $_POST['fst_supplies'] ) : array();
+
+        // A box renamed in this same save takes its box supply along.
+        foreach ( $supplies as $index => $row ) {
+            if ( ! is_array( $row ) || ! isset( $row['role'] ) || ! is_string( $row['role'] ) || 0 !== strpos( $row['role'], 'box:' ) ) {
+                continue;
+            }
+            $old_name = FST_Label_Cost::lower( substr( $row['role'], 4 ) );
+            if ( isset( $renamed[ $old_name ] ) ) {
+                $supplies[ $index ]['role'] = 'box:' . $renamed[ $old_name ];
+            }
+        }
         $clean    = FST_Supplies::sanitize_supplies( $supplies, self::get_standard_boxes(), (int) get_option( FST_Supplies::OPTION_LAST_ID, 0 ) );
 
         update_option( FST_Supplies::OPTION, $clean['supplies'] );

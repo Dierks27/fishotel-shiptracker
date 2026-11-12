@@ -65,7 +65,7 @@ Database version 1.4.0 (also added automatically on update; nothing existing is 
 
 #### Supplies, purchases and stock
 
-Each supply has a name, a unit (`each`, `sheets`, `feet` or your own words), **Count it down** (keep a count of how many are left) with an optional **Reorder at** level, and **Used as** — what lets a new box find the supply by itself: *Heat pack*, *Ice pack*, *Fish bag*, *Foam*, *Paper*, or *The box: &lt;one of your standard boxes&gt;*. Only one supply can have each use (a box supply: one per standard box); a second one keeps its row but loses the use.
+Each supply has a name, a unit (`each`, `sheets`, `feet` or your own words), **Count it down** (keep a count of how many are left) with an optional **Reorder at** level, and **Used as** — what lets a new box find the supply by itself: *Heat pack*, *Ice pack*, *Fish bag*, *Foam*, *Paper*, or *The box: &lt;one of your standard boxes&gt;*. Only one supply can have each use (a box supply: one per standard box); a second one keeps its row but loses the use. Renaming a standard box keeps its box supply tied to it.
 
 Below the lists, **Purchases & stock**:
 
