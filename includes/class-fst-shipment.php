@@ -464,7 +464,7 @@ class FST_Shipment {
      *
      * Same exclusions as the rest of the Analytics page: a box counts when
      * one of its rows has a status other than unknown / label_created and a
-     * ship date in the range. The end date is included up to midnight.
+     * ship date in the range (the end date included, see range_end()).
      *
      * @param string $date_from Optional. Y-m-d start date.
      * @param string $date_to   Optional. Y-m-d end date.
@@ -487,7 +487,7 @@ class FST_Shipment {
         }
         if ( $date_to ) {
             $where   .= ' AND ship_date <= %s';
-            $values[] = preg_match( '/^\d{4}-\d{2}-\d{2}$/', $date_to ) ? $date_to . ' 23:59:59' : $date_to;
+            $values[] = self::range_end( $date_to );
         }
 
         $sql = "SELECT DISTINCT tracking_number FROM " . self::table() . " {$where}";
@@ -673,6 +673,19 @@ class FST_Shipment {
     }
 
     /**
+     * Upper bound of a ship-date range. ship_date is a DATETIME, so a bare
+     * Y-m-d end date has to mean the END of that day — compared as-is it is
+     * midnight, and everything shipped on the last day (today, for the
+     * preset ranges) fell out of the stats.
+     *
+     * @param string $date_to Y-m-d, or a full datetime (used unchanged).
+     * @return string
+     */
+    private static function range_end( $date_to ) {
+        return preg_match( '/^\d{4}-\d{2}-\d{2}$/', (string) $date_to ) ? $date_to . ' 23:59:59' : $date_to;
+    }
+
+    /**
      * Count shipments by status.
      *
      * @param string $date_from Optional. Y-m-d start date.
@@ -691,7 +704,7 @@ class FST_Shipment {
         }
         if ( $date_to ) {
             $where   .= ' AND ship_date <= %s';
-            $values[] = $date_to;
+            $values[] = self::range_end( $date_to );
         }
 
         // Dedupe across fan-out rows: combined-box shipments produce one row
@@ -804,7 +817,7 @@ class FST_Shipment {
         }
         if ( $date_to ) {
             $where   .= ' AND ship_date <= %s';
-            $values[] = $date_to;
+            $values[] = self::range_end( $date_to );
         }
 
         $sql = "SELECT carrier, COUNT(DISTINCT tracking_number) as count FROM " . self::table() . " {$where} GROUP BY carrier";
@@ -847,7 +860,7 @@ class FST_Shipment {
              GROUP BY DATE(ship_date)
              ORDER BY date ASC",
             $date_from,
-            $date_to
+            self::range_end( $date_to )
         ) );
     }
 
@@ -870,7 +883,7 @@ class FST_Shipment {
         }
         if ( $date_to ) {
             $where   .= ' AND ship_date <= %s';
-            $values[] = $date_to;
+            $values[] = self::range_end( $date_to );
         }
 
         // Dedupe before averaging so a combined-box shipment (one tracking#,
@@ -907,7 +920,7 @@ class FST_Shipment {
         }
         if ( $date_to ) {
             $where   .= ' AND ship_date <= %s';
-            $values[] = $date_to;
+            $values[] = self::range_end( $date_to );
         }
 
         // Same dedupe as avg_delivery_days(): one row per tracking_number

@@ -209,7 +209,7 @@ Out for Delivery shipments are polled more frequently. Shipments older than 30 d
 ## Analytics Dashboard
 
 ### Date Range
-Select from presets (7 Days, 30 Days, 90 Days, 6 Months, 1 Year, All Time) or use custom date pickers. All data filters by **ship date** (when the order actually shipped), not the date the record was created in the plugin.
+Select from presets (7 Days, 30 Days, 90 Days, 6 Months, 1 Year, All Time) or use custom date pickers. All data filters by **ship date** (when the order actually shipped), not the date the record was created in the plugin. The end date is included in full (`FST_Shipment::range_end()` turns a bare `Y-m-d` into the end of that day), so a range ending today contains what shipped today.
 
 ### What's Excluded
 Shipments with "Unknown" or "Label Created" status are excluded from all analytics. These are typically old/stale records that were never actually tracked and would skew the numbers.
