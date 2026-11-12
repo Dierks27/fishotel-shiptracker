@@ -142,6 +142,18 @@ echo "Settings lists\n";
 fst_assert_same( array(), FST_Settings::get_standard_boxes(), 'no standard boxes until the owner adds some' );
 fst_assert_same( array(), FST_Settings::get_label_sources(), 'no label sources until the owner adds some' );
 
+/**
+ * The name and size columns of standard box rows. Since 1.9.18 a box also
+ * carries what it starts with (tests/supplies-defaults-test.php).
+ */
+function fst_test_box_columns( array $boxes, array $columns ) {
+    $picked = array();
+    foreach ( $boxes as $box ) {
+        $picked[] = array_intersect_key( $box, array_flip( $columns ) );
+    }
+    return $picked;
+}
+
 $saved_boxes = FST_Settings::sanitize_standard_boxes( array(
     array( 'name' => ' Small ', 'length' => '10', 'width' => '10', 'height' => '10' ),
     array( 'name' => 'Large flat', 'length' => '16.50', 'width' => '12', 'height' => '8' ),
@@ -157,7 +169,7 @@ fst_assert_same(
         array( 'name' => 'Small', 'length' => '10', 'width' => '10', 'height' => '10' ),
         array( 'name' => 'Large flat', 'length' => '16.5', 'width' => '12', 'height' => '8' ),
     ),
-    $saved_boxes,
+    fst_test_box_columns( $saved_boxes, array( 'name', 'length', 'width', 'height' ) ),
     'only complete rows are kept; a repeated name and the blank row are dropped'
 );
 
@@ -172,7 +184,7 @@ fst_assert_same(
         array( 'name' => 'Small', 'length' => '10', 'width' => '10', 'height' => '10', 'dims' => '10x10x10' ),
         array( 'name' => 'Large flat', 'length' => '16.5', 'width' => '12', 'height' => '8', 'dims' => '16.5x12x8' ),
     ),
-    FST_Settings::get_standard_boxes(),
+    fst_test_box_columns( FST_Settings::get_standard_boxes(), array( 'name', 'length', 'width', 'height', 'dims' ) ),
     'get_standard_boxes() adds the normalised dims to each box'
 );
 fst_assert_same( array( 'Partner A', 'Partner B' ), FST_Settings::get_label_sources(), 'get_label_sources() returns the saved names' );

@@ -4,7 +4,9 @@
  *
  * Label cost columns (DB version 1.3.0): label_cost, box_weight, box_dims and
  * label_source describe the BOX, not the row — read and write them through
- * get_box_cost() / set_box_cost(), never through the row itself.
+ * get_box_cost() / set_box_cost(), never through the row itself. A box's
+ * materials (DB version 1.4.0) are not on this table at all: they are keyed
+ * by tracking number in wp_fst_supply_usage — see FST_Supplies.
  *
  * @package FisHotel_ShipTracker
  */
@@ -252,6 +254,13 @@ class FST_Shipment {
 
         if ( $deleted && $removed ) {
             self::rehome_box_cost( $removed );
+
+            // The last row of a tracking number: the box itself is gone,
+            // so its materials go back on the shelf. While another order's
+            // row remains the box still exists and keeps them.
+            if ( ! self::get_all_by_tracking( $removed->tracking_number ) ) {
+                FST_Supplies::clear_box_materials( $removed->tracking_number );
+            }
         }
 
         return $deleted;
@@ -347,7 +356,11 @@ class FST_Shipment {
      * @param int|int[] $order_ids
      * @return array[] Each: the get_box_cost() keys plus `shipment_id` (the
      *                 row of the given order(s) for that box — pass it to
-     *                 fst_set_label_cost), `carrier`, `status`, `ship_date`.
+     *                 fst_set_label_cost), `carrier`, `status`, `ship_date`,
+     *                 and since 1.9.18 `materials` (FST_Supplies record, null
+     *                 when none are recorded), `materials_total` ("4.21" or
+     *                 null) and `total_cost` (label + materials; null while
+     *                 the label cost is not recorded).
      */
     public static function get_order_boxes( $order_ids ) {
         $order_ids = array_values( array_unique( array_filter( array_map( 'absint', (array) $order_ids ) ) ) );
@@ -369,7 +382,7 @@ class FST_Shipment {
                 $box['status']      = $row->status;
                 $box['ship_date']   = isset( $row->ship_date ) ? $row->ship_date : null;
 
-                $boxes[ $key ] = $box;
+                $boxes[ $key ] = self::with_materials( $box );
             }
         }
 
@@ -377,6 +390,25 @@ class FST_Shipment {
         usort( $boxes, array( __CLASS__, 'compare_box_shipment_ids' ) );
 
         return $boxes;
+    }
+
+    /**
+     * Add a box's materials to its cost data: `materials`, `materials_total`
+     * and `total_cost` (label + materials).
+     *
+     * @param array $box get_box_cost() result.
+     * @return array
+     */
+    public static function with_materials( array $box ) {
+        $materials = FST_Supplies::get_box_materials( $box['tracking_number'] );
+
+        $box['materials']       = $materials;
+        $box['materials_total'] = $materials ? $materials['total'] : null;
+        $box['total_cost']      = null === $box['label_cost']
+            ? null
+            : FST_Label_Cost::from_cents( FST_Label_Cost::to_cents( $box['label_cost'] ) + ( $materials ? FST_Label_Cost::to_cents( $materials['total'] ) : 0 ) );
+
+        return $box;
     }
 
     /**

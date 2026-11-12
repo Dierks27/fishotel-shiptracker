@@ -3,7 +3,7 @@
  * Plugin Name: FisHotel ShipTracker
  * Plugin URI: https://fishotel.com
  * Description: Self-hosted shipment tracking for WooCommerce. Tracks UPS & USPS packages, sends automated email notifications, and provides a branded tracking page for customers.
- * Version: 1.9.17
+ * Version: 1.9.18
  * Author: FisHotel
  * Author URI: https://fishotel.com
  * Text Domain: fishotel-shiptracker
@@ -19,8 +19,8 @@
 defined( 'ABSPATH' ) || exit;
 
 // Plugin constants
-define( 'FST_VERSION', '1.9.17' );
-define( 'FST_DB_VERSION', '1.3.0' );
+define( 'FST_VERSION', '1.9.18' );
+define( 'FST_DB_VERSION', '1.4.0' );
 define( 'FST_PLUGIN_FILE', __FILE__ );
 define( 'FST_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
 define( 'FST_PLUGIN_URL', plugin_dir_url( __FILE__ ) );
@@ -104,6 +104,8 @@ final class FisHotel_ShipTracker {
         require_once FST_PLUGIN_DIR . 'includes/class-fst-deactivator.php';
         require_once FST_PLUGIN_DIR . 'includes/class-fst-shipment.php';
         require_once FST_PLUGIN_DIR . 'includes/class-fst-label-cost.php';
+        require_once FST_PLUGIN_DIR . 'includes/class-fst-supplies.php';
+        require_once FST_PLUGIN_DIR . 'includes/class-fst-ship-mode.php';
         require_once FST_PLUGIN_DIR . 'includes/class-fst-tracker.php';
         require_once FST_PLUGIN_DIR . 'includes/class-fst-order.php';
         require_once FST_PLUGIN_DIR . 'includes/class-fst-settings.php';
@@ -148,6 +150,10 @@ final class FisHotel_ShipTracker {
 
         // Admin dashboard widget.
         add_action( 'wp_dashboard_setup', array( $this, 'add_dashboard_widget' ) );
+
+        // Supplies at or under their reorder level, for other plugins:
+        // apply_filters( 'fst_low_supplies', array() ).
+        add_filter( 'fst_low_supplies', array( 'FST_Supplies', 'filter_low_supplies' ) );
 
         // Register custom "Shipped" order status.
         add_action( 'init', array( $this, 'register_shipped_order_status' ) );
@@ -375,6 +381,17 @@ final class FisHotel_ShipTracker {
         $exception_count = isset( $counts['exception'] ) ? $counts['exception'] : 0;
         $late_count      = count( $late );
         $base_url        = admin_url( 'admin.php?page=fst-dashboard' );
+
+        // Supplies to reorder (counted supplies at or under their level).
+        $low_supplies = FST_Supplies::get_low_supplies();
+        if ( ! empty( $low_supplies ) ) {
+            FST_Settings::render_reorder_notice( $low_supplies );
+            ?>
+            <p style="margin: -6px 0 14px; font-size: 12px;">
+                <a href="<?php echo esc_url( admin_url( 'admin.php?page=fst-settings&tab=boxes#fst-supplies-log' ) ); ?>"><?php esc_html_e( 'Log a purchase or recount', 'fishotel-shiptracker' ); ?></a>
+            </p>
+            <?php
+        }
 
         // Needs attention section.
         if ( $exception_count > 0 || $late_count > 0 ) : ?>

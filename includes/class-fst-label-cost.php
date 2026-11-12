@@ -9,6 +9,10 @@
  * from its shipment rows, reading a cost CSV and the Analytics report maths,
  * so those parts are unit-tested without WordPress (tests/label-cost-*.php).
  *
+ * Since 1.9.18 a box also has materials (FST_Supplies): the report's "cost"
+ * is label + materials, and it knows about orders with no label of their
+ * own (FST_Ship_Mode).
+ *
  * @package FisHotel_ShipTracker
  */
 
@@ -1133,11 +1137,16 @@ class FST_Label_Cost {
     // -----------------------------------------------------------------
 
     /**
-     * Label cost report for a ship-date range — what the Analytics page shows.
+     * Cost report for a ship-date range — what the Analytics page shows.
+     *
+     * Since 1.9.18 a box costs its label plus its materials, orders that
+     * went in another order's box count towards that box, and the report
+     * carries the local pickups and the supplies figures of the range.
      *
      * @param string $date_from Y-m-d or ''.
      * @param string $date_to   Y-m-d or ''.
-     * @return array See build_report().
+     * @return array build_report(), plus `supplies`
+     *               (FST_Supplies::build_supplies_report()).
      */
     public static function get_report( $date_from = '', $date_to = '' ) {
         $data   = FST_Shipment::get_cost_report_rows( $date_from, $date_to );
@@ -1145,31 +1154,89 @@ class FST_Label_Cost {
 
         foreach ( $data['rows'] as $row ) {
             $order_id = (int) $row->order_id;
-            if ( isset( $orders[ $order_id ] ) ) {
-                continue;
-            }
-
-            $order = wc_get_order( $order_id );
-            if ( $order instanceof WC_Order ) {
-                // What the customer paid for shipping, before tax, less any
-                // of it that was refunded.
-                $paid = (float) $order->get_shipping_total() - (float) $order->get_total_shipping_refunded();
-
-                $orders[ $order_id ] = array(
-                    'shipping' => max( 0, $paid ),
-                    'number'   => (string) $order->get_order_number(),
-                    'url'      => $order->get_edit_order_url(),
-                );
-            } else {
-                $orders[ $order_id ] = array(
-                    'shipping' => null,
-                    'number'   => (string) $order_id,
-                    'url'      => '',
-                );
+            if ( ! isset( $orders[ $order_id ] ) ) {
+                $orders[ $order_id ] = self::order_for_report( $order_id );
             }
         }
 
-        return self::build_report( $data['tracking_numbers'], $data['rows'], $orders, self::standard_boxes() );
+        $extras = array(
+            'materials'     => FST_Supplies::get_materials_for_boxes( $data['tracking_numbers'] ),
+            'riders'        => array(),
+            'local_pickups' => array(),
+        );
+
+        // Orders with no label of their own.
+        $used = array_values( $extras['materials'] );
+        foreach ( FST_Ship_Mode::get_marked_orders() as $marked ) {
+            $order_id = $marked['order_id'];
+
+            if ( 'with_order' === $marked['mode'] ) {
+                $extras['riders'][] = array(
+                    'order_id'       => $order_id,
+                    'host_order_ids' => $marked['host_order_ids'],
+                );
+                if ( ! isset( $orders[ $order_id ] ) ) {
+                    $orders[ $order_id ] = self::order_for_report( $order_id );
+                }
+                continue;
+            }
+
+            // A local pickup belongs to the day it was marked.
+            $day = substr( (string) $marked['date'], 0, 10 );
+            if ( ( $date_from && $day < $date_from ) || ( $date_to && $day > $date_to ) ) {
+                continue;
+            }
+            $materials                 = FST_Supplies::get_order_materials( $order_id );
+            $extras['local_pickups'][] = array(
+                'order_id'  => $order_id,
+                'date'      => $marked['date'],
+                'materials' => $materials,
+            );
+            if ( $materials ) {
+                $used[] = $materials;
+            }
+        }
+
+        $report = self::build_report( $data['tracking_numbers'], $data['rows'], $orders, self::standard_boxes(), $extras );
+
+        $report['supplies'] = FST_Supplies::build_supplies_report(
+            FST_Supplies::get_supplies_raw(),
+            FST_Supplies::get_purchases(),
+            $used,
+            FST_Supplies::get_stock(),
+            $date_from,
+            $date_to
+        );
+
+        return $report;
+    }
+
+    /**
+     * What the report needs to know about an order: the shipping its
+     * customer paid, its number and its edit link.
+     *
+     * @param int $order_id
+     * @return array shipping (null = the order no longer exists), number, url.
+     */
+    private static function order_for_report( $order_id ) {
+        $order = wc_get_order( $order_id );
+        if ( ! $order instanceof WC_Order ) {
+            return array(
+                'shipping' => null,
+                'number'   => (string) $order_id,
+                'url'      => '',
+            );
+        }
+
+        // What the customer paid for shipping, before tax, less any of it
+        // that was refunded.
+        $paid = (float) $order->get_shipping_total() - (float) $order->get_total_shipping_refunded();
+
+        return array(
+            'shipping' => max( 0, $paid ),
+            'number'   => (string) $order->get_order_number(),
+            'url'      => $order->get_edit_order_url(),
+        );
     }
 
     /**
@@ -1177,13 +1244,19 @@ class FST_Label_Cost {
      *
      * Rules:
      *  - A box is one tracking number; its cost is read once (box_from_rows()).
-     *  - A box with no recorded cost (NULL) is counted as shipped but left
-     *    out of every total, average and difference. NULL is never 0; a
-     *    recorded cost of 0.00 is a real cost and is included.
+     *  - What a box cost = its label + its materials (boxes, foam, paper,
+     *    bags, packs, other). Materials that were never recorded add nothing.
+     *  - A box with no recorded LABEL cost (NULL) is counted as shipped but
+     *    left out of every total, average and difference — its materials
+     *    included. NULL is never 0; a recorded cost of 0.00 is a real cost
+     *    and is included.
      *  - Shipping paid by a box = the shipping of every order in it (a shared
      *    box sums its orders). An order that went out in several boxes has
      *    its shipping split evenly between them (spare cents to the earliest
      *    boxes), so it is counted once however many boxes it took.
+     *  - An order that "went in another order's box" has no row of its own:
+     *    its shipping is split between the boxes of the order it went with,
+     *    in exactly the same way.
      *
      * @param string[] $tracking_numbers Boxes shipped in the range.
      * @param array    $rows             Every shipment row (stdClass: id, order_id,
@@ -1192,21 +1265,43 @@ class FST_Label_Cost {
      * @param array    $orders           order_id => { shipping (decimal; null = the order no
      *                                   longer exists, counted as 0 paid), number, url }.
      * @param array    $standard_boxes   FST_Settings::get_standard_boxes(), for size names.
+     * @param array    $extras {
+     *     Optional, since 1.9.18.
+     *
+     *     @type array $materials     box_key() => FST_Supplies materials record of that box.
+     *     @type array $riders        [ { order_id, host_order_ids } ] — orders that went in another
+     *                                order's box; their shipping is looked up in $orders.
+     *     @type array $local_pickups [ { order_id, date, materials (record or null) } ] in the range.
+     * }
      * @return array {
-     *     @type array $summary        boxes, boxes_with_cost, boxes_without_cost, total_cost,
-     *                                 total_paid, difference (paid − cost), avg_cost (those four
-     *                                 null when no box has a cost), paid_without_cost. Money as
-     *                                 decimal strings.
-     *     @type array $by_size        [ { dims, label, boxes, avg_cost, avg_paid, avg_diff } ]
-     *     @type array $by_source      [ { source, label, boxes, total_cost, avg_cost } ] — sources
-     *                                 differing only in letter case are one row.
-     *     @type array $size_by_source { sources: [ { source, label } ], rows: [ { dims, label,
-     *                                 cells: source => { boxes, avg_cost }, cheapest } ] }
-     *     @type array $losers         The 20 boxes with the most negative difference.
-     *     @type array $boxes          Every box in the range (see code for keys).
+     *     @type array $summary         boxes, boxes_with_cost, boxes_without_cost, total_cost,
+     *                                  total_paid, difference (paid − cost), avg_cost (those four
+     *                                  null when no box has a cost), paid_without_cost. Money as
+     *                                  decimal strings. "Cost" is label + materials.
+     *     @type array $split           What total_cost is made of: label, boxes, foam, paper, bags,
+     *                                  packs, other and total — decimal strings that add up.
+     *     @type array $materials       total (on boxes with a label cost), without_label_cost (on
+     *                                  boxes left out of the totals), boxes_with_materials.
+     *     @type array $by_size         [ { dims, label, boxes, avg_cost, avg_paid, avg_diff } ]
+     *     @type array $split_by_size   dims => split of that row's boxes (same keys as `split`).
+     *     @type array $by_source       [ { source, label, boxes, total_cost, avg_cost } ] — sources
+     *                                  differing only in letter case are one row.
+     *     @type array $split_by_source source => split of that row's boxes.
+     *     @type array $size_by_source  { sources: [ { source, label } ], rows: [ { dims, label,
+     *                                  cells: source => { boxes, avg_cost }, cheapest } ] }
+     *     @type array $losers          The 20 boxes with the most negative difference.
+     *     @type array $boxes           Every box in the range (see code for keys).
+     *     @type array $free_shipping   orders (shipped with a label, paid 0.00 shipping), cost (their
+     *                                  share of what their boxes cost), orders_without_cost.
+     *     @type array $local_pickups   orders, with_materials, materials, split.
+     *     @type array $in_other_box    orders — how many went in another order's box.
      * }
      */
-    public static function build_report( array $tracking_numbers, array $rows, array $orders, array $standard_boxes = array() ) {
+    public static function build_report( array $tracking_numbers, array $rows, array $orders, array $standard_boxes = array(), array $extras = array() ) {
+        $materials     = isset( $extras['materials'] ) ? (array) $extras['materials'] : array();
+        $riders        = isset( $extras['riders'] ) ? (array) $extras['riders'] : array();
+        $local_pickups = isset( $extras['local_pickups'] ) ? (array) $extras['local_pickups'] : array();
+
         $rows_by_box = array();
         foreach ( $rows as $row ) {
             $rows_by_box[ self::box_key( $row->tracking_number ) ][] = $row;
@@ -1238,19 +1333,48 @@ class FST_Label_Cost {
         // Each order's shipping, split between its boxes.
         $share = array();
         foreach ( $order_boxes as $order_id => $keys ) {
-            asort( $keys );
             $cents = isset( $orders[ $order_id ]['shipping'] ) ? self::to_cents( $orders[ $order_id ]['shipping'] ) : 0;
-            $count = count( $keys );
-            $base  = intdiv( $cents, $count );
-            $spare = $cents % $count;
-            $n     = 0;
-            foreach ( $keys as $key => $row_id ) {
-                $share[ $key ][ $order_id ] = $base + ( $n < $spare ? 1 : 0 );
-                $n++;
+            foreach ( self::split_between_boxes( $cents, $keys ) as $key => $part ) {
+                $share[ $key ][ $order_id ] = $part;
             }
         }
 
-        $boxes = array();
+        // Orders that went in another order's box: their shipping is split
+        // between that order's boxes. An order with a row of its own is not
+        // one of these, whatever its meta says.
+        $box_riders = array();
+        $share_done = array();
+        foreach ( $riders as $rider ) {
+            $rider_id = isset( $rider['order_id'] ) ? (int) $rider['order_id'] : 0;
+            if ( ! $rider_id || isset( $order_boxes[ $rider_id ] ) || isset( $share_done[ $rider_id ] ) ) {
+                continue;
+            }
+
+            $keys = array();
+            foreach ( isset( $rider['host_order_ids'] ) ? (array) $rider['host_order_ids'] : array() as $host_id ) {
+                if ( empty( $order_boxes[ (int) $host_id ] ) ) {
+                    continue;
+                }
+                foreach ( $order_boxes[ (int) $host_id ] as $key => $row_id ) {
+                    if ( ! isset( $keys[ $key ] ) || $row_id < $keys[ $key ] ) {
+                        $keys[ $key ] = $row_id;
+                    }
+                }
+            }
+            if ( empty( $keys ) ) {
+                continue;
+            }
+            $share_done[ $rider_id ] = true;
+
+            $cents = isset( $orders[ $rider_id ]['shipping'] ) ? self::to_cents( $orders[ $rider_id ]['shipping'] ) : 0;
+            foreach ( self::split_between_boxes( $cents, $keys ) as $key => $part ) {
+                $share[ $key ][ $rider_id ] = $part;
+                $box_riders[ $key ][]       = $rider_id;
+            }
+        }
+
+        $boxes         = array();
+        $riders_in_box = array();
         foreach ( $tracking_numbers as $tracking_number ) {
             $key = self::box_key( $tracking_number );
             if ( isset( $boxes[ $key ] ) || empty( $rows_by_box[ $key ] ) ) {
@@ -1265,9 +1389,10 @@ class FST_Label_Cost {
                 }
             }
 
+            $rider_ids  = isset( $box_riders[ $key ] ) ? $box_riders[ $key ] : array();
             $paid_cents = 0;
             $box_orders = array();
-            foreach ( $box['order_ids'] as $order_id ) {
+            foreach ( array_merge( $box['order_ids'], $rider_ids ) as $order_id ) {
                 $paid_cents  += isset( $share[ $key ][ $order_id ] ) ? $share[ $key ][ $order_id ] : 0;
                 $known        = isset( $orders[ $order_id ]['shipping'] );
                 $box_orders[] = array(
@@ -1275,10 +1400,18 @@ class FST_Label_Cost {
                     'number'  => isset( $orders[ $order_id ]['number'] ) ? (string) $orders[ $order_id ]['number'] : (string) $order_id,
                     'url'     => isset( $orders[ $order_id ]['url'] ) ? (string) $orders[ $order_id ]['url'] : '',
                     'missing' => ! $known,
+                    'rider'   => in_array( $order_id, $rider_ids, true ),
                 );
             }
+            foreach ( $rider_ids as $rider_id ) {
+                $riders_in_box[ $rider_id ] = true;
+            }
 
-            $cost_cents = null === $box['label_cost'] ? null : self::to_cents( $box['label_cost'] );
+            // Label + materials. The split is kept in cents per part.
+            $record      = isset( $materials[ $key ] ) && is_array( $materials[ $key ] ) ? $materials[ $key ] : null;
+            $label_cents = null === $box['label_cost'] ? null : self::to_cents( $box['label_cost'] );
+            $split       = self::split_cents( $record, null === $label_cents ? 0 : $label_cents );
+            $cost_cents  = null === $label_cents ? null : $split['total'];
 
             $boxes[ $key ] = array(
                 'tracking_number' => $box['tracking_number'],
@@ -1289,11 +1422,16 @@ class FST_Label_Cost {
                 'box_dims'        => $box['box_dims'],
                 'label_source'    => $box['label_source'],
                 'size_label'      => self::size_label( $box['box_dims'], $standard_boxes ),
-                'shared_box'      => $box['shared_box'],
+                'shared_box'      => $box['shared_box'] || ! empty( $rider_ids ),
                 'orders'          => $box_orders,
+                'materials'       => $record,
+                'materials_cents' => $split['total'] - $split['label'],
+                'materials_total' => self::from_cents( $split['total'] - $split['label'] ),
+                'split_cents'     => $split,
                 'cost_cents'      => $cost_cents,
                 'paid_cents'      => $paid_cents,
                 'diff_cents'      => null === $cost_cents ? null : $paid_cents - $cost_cents,
+                'total_cost'      => null === $cost_cents ? null : self::from_cents( $cost_cents ),
                 'paid'            => self::from_cents( $paid_cents ),
                 'difference'      => null === $cost_cents ? null : self::from_cents( $paid_cents - $cost_cents ),
             );
@@ -1304,21 +1442,56 @@ class FST_Label_Cost {
         $total_cost        = 0;
         $total_paid        = 0;
         $paid_without_cost = 0;
+        $with_materials    = 0;
+        $materials_left    = 0;
+        $total_split       = self::split_cents( null, 0 );
         $sizes             = array();
         $sources           = array();
         $source_spellings  = array();
         $matrix            = array();
         $losers            = array();
 
+        // Free shipping given: orders that shipped with a label and paid
+        // nothing for shipping, and their share of what their boxes cost.
+        $free_orders   = array();
+        $free_uncosted = array();
+        $free_cost     = 0;
+
         foreach ( $boxes as $box ) {
+            if ( null !== $box['materials'] ) {
+                $with_materials++;
+            }
+
+            $own_ids = array();
+            foreach ( $box['orders'] as $box_order ) {
+                if ( ! $box_order['rider'] ) {
+                    $own_ids[] = $box_order['id'];
+                }
+            }
+            sort( $own_ids );
+            foreach ( $own_ids as $position => $order_id ) {
+                if ( ! isset( $orders[ $order_id ]['shipping'] ) || 0 !== self::to_cents( $orders[ $order_id ]['shipping'] ) ) {
+                    continue;
+                }
+                $free_orders[ $order_id ] = true;
+                if ( null === $box['cost_cents'] ) {
+                    $free_uncosted[ $order_id ] = true;
+                    continue;
+                }
+                // A shared box is shared out evenly, spare cents to the lowest order numbers.
+                $free_cost += intdiv( $box['cost_cents'], count( $own_ids ) ) + ( $position < $box['cost_cents'] % count( $own_ids ) ? 1 : 0 );
+            }
+
             if ( null === $box['cost_cents'] ) {
                 $paid_without_cost += $box['paid_cents'];
+                $materials_left    += $box['materials_cents'];
                 continue;
             }
 
             $with_cost++;
             $total_cost += $box['cost_cents'];
             $total_paid += $box['paid_cents'];
+            $total_split = self::add_split( $total_split, $box['split_cents'] );
 
             $dims   = null === $box['box_dims'] ? '' : $box['box_dims'];
             $source = null === $box['label_source'] ? '' : $box['label_source'];
@@ -1333,17 +1506,19 @@ class FST_Label_Cost {
             $source = $source_spellings[ $source_key ];
 
             if ( ! isset( $sizes[ $dims ] ) ) {
-                $sizes[ $dims ] = array( 'boxes' => 0, 'cost' => 0, 'paid' => 0 );
+                $sizes[ $dims ] = array( 'boxes' => 0, 'cost' => 0, 'paid' => 0, 'split' => self::split_cents( null, 0 ) );
             }
             $sizes[ $dims ]['boxes']++;
             $sizes[ $dims ]['cost'] += $box['cost_cents'];
             $sizes[ $dims ]['paid'] += $box['paid_cents'];
+            $sizes[ $dims ]['split'] = self::add_split( $sizes[ $dims ]['split'], $box['split_cents'] );
 
             if ( ! isset( $sources[ $source ] ) ) {
-                $sources[ $source ] = array( 'boxes' => 0, 'cost' => 0 );
+                $sources[ $source ] = array( 'boxes' => 0, 'cost' => 0, 'split' => self::split_cents( null, 0 ) );
             }
             $sources[ $source ]['boxes']++;
             $sources[ $source ]['cost'] += $box['cost_cents'];
+            $sources[ $source ]['split'] = self::add_split( $sources[ $source ]['split'], $box['split_cents'] );
 
             if ( ! isset( $matrix[ $dims ][ $source ] ) ) {
                 $matrix[ $dims ][ $source ] = array( 'boxes' => 0, 'cost' => 0 );
@@ -1357,7 +1532,8 @@ class FST_Label_Cost {
         }
 
         // By box size, most used first.
-        $by_size = array();
+        $by_size       = array();
+        $split_by_size = array();
         foreach ( $sizes as $dims => $totals ) {
             $by_size[] = array(
                 'dims'     => (string) $dims,
@@ -1367,11 +1543,14 @@ class FST_Label_Cost {
                 'avg_paid' => self::from_cents( self::average( $totals['paid'], $totals['boxes'] ) ),
                 'avg_diff' => self::from_cents( self::average( $totals['paid'] - $totals['cost'], $totals['boxes'] ) ),
             );
+
+            $split_by_size[ (string) $dims ] = self::format_split( $totals['split'] );
         }
         usort( $by_size, array( __CLASS__, 'compare_group_rows' ) );
 
         // By label source, most used first.
-        $by_source = array();
+        $by_source       = array();
+        $split_by_source = array();
         foreach ( $sources as $source => $totals ) {
             $by_source[] = array(
                 'source'     => (string) $source,
@@ -1380,6 +1559,8 @@ class FST_Label_Cost {
                 'total_cost' => self::from_cents( $totals['cost'] ),
                 'avg_cost'   => self::from_cents( self::average( $totals['cost'], $totals['boxes'] ) ),
             );
+
+            $split_by_source[ (string) $source ] = self::format_split( $totals['split'] );
         }
         usort( $by_source, array( __CLASS__, 'compare_group_rows' ) );
 
@@ -1433,8 +1614,20 @@ class FST_Label_Cost {
 
         usort( $losers, array( __CLASS__, 'compare_losers' ) );
 
+        // Local pickups: no label (a real 0.00), only what was packed.
+        $pickup_split     = self::split_cents( null, 0 );
+        $pickup_materials = 0;
+        foreach ( $local_pickups as $pickup ) {
+            if ( isset( $pickup['materials'] ) && is_array( $pickup['materials'] ) ) {
+                $pickup_materials++;
+                $pickup_split = self::add_split( $pickup_split, self::split_cents( $pickup['materials'], 0 ) );
+            }
+        }
+        $pickup_split = self::format_split( $pickup_split );
+        unset( $pickup_split['label'] );
+
         return array(
-            'summary'        => array(
+            'summary'         => array(
                 'boxes'              => count( $boxes ),
                 'boxes_with_cost'    => $with_cost,
                 'boxes_without_cost' => count( $boxes ) - $with_cost,
@@ -1445,15 +1638,105 @@ class FST_Label_Cost {
                 'avg_cost'           => $with_cost > 0 ? self::from_cents( self::average( $total_cost, $with_cost ) ) : null,
                 'paid_without_cost'  => self::from_cents( $paid_without_cost ),
             ),
-            'by_size'        => $by_size,
-            'by_source'      => $by_source,
-            'size_by_source' => array(
+            'split'           => self::format_split( $total_split ),
+            'materials'       => array(
+                'total'                => self::from_cents( $total_split['total'] - $total_split['label'] ),
+                'without_label_cost'   => self::from_cents( $materials_left ),
+                'boxes_with_materials' => $with_materials,
+            ),
+            'by_size'         => $by_size,
+            'split_by_size'   => $split_by_size,
+            'by_source'       => $by_source,
+            'split_by_source' => $split_by_source,
+            'size_by_source'  => array(
                 'sources' => $matrix_sources,
                 'rows'    => $matrix_rows,
             ),
-            'losers'         => array_slice( $losers, 0, 20 ),
-            'boxes'          => array_values( $boxes ),
+            'losers'          => array_slice( $losers, 0, 20 ),
+            'boxes'           => array_values( $boxes ),
+            'free_shipping'   => array(
+                'orders'              => count( $free_orders ),
+                'cost'                => self::from_cents( $free_cost ),
+                'orders_without_cost' => count( $free_uncosted ),
+            ),
+            'local_pickups'   => array(
+                'orders'         => count( $local_pickups ),
+                'with_materials' => $pickup_materials,
+                'materials'      => $pickup_split['total'],
+                'split'          => $pickup_split,
+            ),
+            'in_other_box'    => array(
+                'orders' => count( $riders_in_box ),
+            ),
         );
+    }
+
+    /**
+     * Split an amount evenly between boxes, spare cents to the earliest.
+     *
+     * @param int   $cents
+     * @param array $keys Box key => the row id that orders the boxes.
+     * @return array Box key => cents; adds up to $cents.
+     */
+    private static function split_between_boxes( $cents, array $keys ) {
+        asort( $keys );
+
+        $count = count( $keys );
+        $base  = intdiv( $cents, $count );
+        $spare = $cents % $count;
+        $parts = array();
+        $n     = 0;
+        foreach ( $keys as $key => $row_id ) {
+            $parts[ $key ] = $base + ( $n < $spare ? 1 : 0 );
+            $n++;
+        }
+
+        return $parts;
+    }
+
+    /**
+     * What a cost is made of, in whole cents: the label, then the parts of
+     * the materials, then the total.
+     *
+     * @param array|null $materials   FST_Supplies materials record, or null.
+     * @param int        $label_cents
+     * @return array label, boxes, foam, paper, bags, packs, other, total.
+     */
+    private static function split_cents( $materials, $label_cents ) {
+        $split = array( 'label' => (int) $label_cents );
+        foreach ( FST_Supplies::SPLIT_KEYS as $part ) {
+            $split[ $part ] = is_array( $materials ) && isset( $materials['split'][ $part ] ) ? self::to_cents( $materials['split'][ $part ] ) : 0;
+        }
+        $split['total'] = array_sum( $split );
+
+        return $split;
+    }
+
+    /**
+     * Add one split to another, part by part.
+     *
+     * @param array $sum
+     * @param array $split
+     * @return array
+     */
+    private static function add_split( array $sum, array $split ) {
+        foreach ( $split as $part => $cents ) {
+            $sum[ $part ] += $cents;
+        }
+        return $sum;
+    }
+
+    /**
+     * A split in cents as decimal strings.
+     *
+     * @param array $split
+     * @return array
+     */
+    private static function format_split( array $split ) {
+        foreach ( $split as $part => $cents ) {
+            $split[ $part ] = self::from_cents( $cents );
+        }
+        return $split;
     }
 
     /**
@@ -1481,7 +1764,7 @@ class FST_Label_Cost {
      * @param string|float|int $amount
      * @return int
      */
-    private static function to_cents( $amount ) {
+    public static function to_cents( $amount ) {
         return (int) round( (float) $amount * 100 );
     }
 
@@ -1491,7 +1774,7 @@ class FST_Label_Cost {
      * @param int $cents
      * @return string
      */
-    private static function from_cents( $cents ) {
+    public static function from_cents( $cents ) {
         $cents = (int) $cents;
         return ( $cents < 0 ? '-' : '' ) . self::format_hundredths( abs( $cents ) );
     }

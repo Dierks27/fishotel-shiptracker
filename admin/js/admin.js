@@ -77,9 +77,38 @@
 				}
 			});
 
-			// Settings: add / remove a row of the standard boxes and label sources lists.
+			// Enter inside a materials or "how it went out" field must not submit the order form either.
+			$(document).on('keypress', '.fst-mat-fields input, .fst-ship-mode input, .fst-ship-mode select', function (e) {
+				if (e.which === 13) {
+					e.preventDefault();
+					$(this).closest('.fst-cost-form, .fst-ship-mode').find('.fst-cost-save-btn, .fst-ship-mode-save').trigger('click');
+				}
+			});
+
+			// How it went out: show the order number box / the materials for the mode picked.
+			$(document).on('change', '.fst-ship-mode-select', function () {
+				var box = $(this).closest('.fst-ship-mode');
+				box.find('.fst-ship-with-row').toggle($(this).val() === 'with_order');
+				box.find('.fst-ship-local-row').toggle($(this).val() === 'local');
+			});
+
+			// How it went out: save.
+			$(document).on('click', '.fst-ship-mode-save', $.proxy(this.saveShipMode, this));
+
+			// Settings: add / remove a row of the standard boxes, label sources and supplies lists.
 			$(document).on('click', '.fst-list-add', $.proxy(this.addListRow, this));
 			$(document).on('click', '.fst-list-remove', $.proxy(this.removeListRow, this));
+
+			// Settings: a suggested foam / paper cost is only filled in when it is clicked.
+			$(document).on('click', '.fst-suggestion', function (e) {
+				e.preventDefault();
+				$(this).closest('td').find('input').first().val($(this).data('value')).trigger('change').focus();
+			});
+
+			// Settings: the sheet size only matters for the supply used as foam.
+			$(document).on('change', '.fst-supply-role', function () {
+				$(this).closest('td').find('.fst-foam-sheet').toggle($(this).val() === 'foam');
+			});
 
 			// Tab switching on settings page
 			$(document).on('click', '.fst-tabs .nav-tab', $.proxy(this.switchTab, this));
@@ -216,8 +245,93 @@
 		},
 
 		/**
+		 * Read the materials inputs inside a wrapper as the JSON the server
+		 * takes: a quantity per supply (empty = 0, which removes the line)
+		 * and the two flat amounts. Null when the wrapper has no such inputs.
+		 */
+		readMaterials: function (wrapper) {
+			var fields = wrapper.find('.fst-mat-fields');
+			if (!fields.length) {
+				return null;
+			}
+
+			var lines = [];
+			fields.find('.fst-mat-qty').each(function () {
+				lines.push({
+					supply_id: $(this).data('supply-id'),
+					qty: ($(this).val() || '').trim() || '0',
+				});
+			});
+
+			return JSON.stringify({
+				lines: lines,
+				foam_cost: (fields.find('.fst-mat-foam').val() || '').trim(),
+				paper_cost: (fields.find('.fst-mat-paper').val() || '').trim(),
+			});
+		},
+
+		/**
+		 * Save how an order with no label of its own went out: a local
+		 * pickup (with its materials), in another order's box, or neither.
+		 */
+		saveShipMode: function (e) {
+			e.preventDefault();
+			e.stopPropagation();
+
+			var button = $(e.currentTarget);
+			var box = button.closest('.fst-ship-mode');
+			var message = box.find('.fst-ship-mode-message');
+			var mode = box.find('.fst-ship-mode-select').val();
+			var data = {
+				action: 'fst_set_ship_mode',
+				nonce: fst_admin.nonce,
+				order_id: box.data('order-id'),
+				mode: mode,
+			};
+
+			if (mode === 'with_order') {
+				data.with_order_id = (box.find('.fst-ship-with-order').val() || '').trim();
+			}
+			if (mode === 'local') {
+				var materials = this.readMaterials(box.find('.fst-ship-local-row'));
+				if (materials !== null) {
+					data.materials = materials;
+				}
+			}
+
+			button.prop('disabled', true);
+			message.css('color', '').text('Saving...');
+
+			$.ajax({
+				url: fst_admin.ajax_url,
+				type: 'POST',
+				data: data,
+				success: function (response) {
+					if (response && response.success) {
+						message.css('color', '#1e7e34').text(response.data.message || 'Saved.');
+						window.location.replace(window.location.href);
+					} else {
+						var errMsg = (response && response.data && response.data.message)
+							? response.data.message
+							: (response && response.data ? response.data : 'Unknown error.');
+						message.css('color', '#dc3545').text(errMsg);
+					}
+				},
+				error: function (xhr) {
+					message.css('color', '#dc3545').text('Request failed (' + (xhr.status || 'network error') + ').');
+				},
+				complete: function () {
+					button.prop('disabled', false);
+				},
+			});
+
+			return false;
+		},
+
+		/**
 		 * Save the label cost of an existing shipment's box via AJAX.
-		 * All four fields are sent, so an emptied field is cleared.
+		 * All four fields are sent, so an emptied field is cleared; the
+		 * materials ride along when the form shows them.
 		 */
 		saveLabelCost: function (e) {
 			e.preventDefault();
@@ -227,20 +341,26 @@
 			var form = button.closest('.fst-cost-form');
 			var message = form.find('.fst-cost-message');
 
+			var data = $.extend(
+				{
+					action: 'fst_set_label_cost',
+					nonce: fst_admin.nonce,
+					shipment_id: button.data('id'),
+				},
+				this.readCostFields(form)
+			);
+			var materials = this.readMaterials(form);
+			if (materials !== null) {
+				data.materials = materials;
+			}
+
 			button.prop('disabled', true);
 			message.css('color', '').text('Saving...');
 
 			$.ajax({
 				url: fst_admin.ajax_url,
 				type: 'POST',
-				data: $.extend(
-					{
-						action: 'fst_set_label_cost',
-						nonce: fst_admin.nonce,
-						shipment_id: button.data('id'),
-					},
-					this.readCostFields(form)
-				),
+				data: data,
 				success: function (response) {
 					if (response && response.success) {
 						message.css('color', '#1e7e34').text(response.data.message || 'Saved.');
@@ -276,21 +396,41 @@
 			// Next free row number — rows may have been removed, so count
 			// from the highest one in use, not from the number of rows.
 			var index = 0;
-			tbody.find('input').each(function () {
+			tbody.find('input, select').each(function () {
 				var match = this.name.match(/\[(\d+)\]/);
 				if (match) {
 					index = Math.max(index, parseInt(match[1], 10) + 1);
 				}
 			});
 
-			row.find('input').each(function () {
+			row.find('input, select').each(function () {
 				// fst_standard_boxes[3][name] -> fst_standard_boxes[4][name]
 				this.name = this.name.replace(/\[\d+\]/, '[' + index + ']');
-				this.value = '';
 			});
+			this.clearListRow(row);
 
 			tbody.append(row);
-			row.find('input').first().focus();
+			row.find('input:visible').first().focus();
+		},
+
+		/**
+		 * Settings: empty a list row — text, numbers and the hidden id are
+		 * blanked, a checkbox is unticked (its value must stay), a dropdown
+		 * goes back to its first choice, and what was only shown for the
+		 * saved row (price, on hand, suggestions) is dropped.
+		 */
+		clearListRow: function (row) {
+			row.find('input, select').each(function () {
+				if (this.type === 'checkbox') {
+					this.checked = false;
+				} else if (this.tagName === 'SELECT') {
+					this.selectedIndex = 0;
+				} else {
+					this.value = '';
+				}
+			});
+			row.find('.fst-row-info').empty();
+			row.find('.fst-foam-sheet').hide();
 		},
 
 		/**
@@ -304,7 +444,7 @@
 			if (row.siblings('.fst-list-row').length) {
 				row.remove();
 			} else {
-				row.find('input').val('');
+				this.clearListRow(row);
 			}
 		},
 

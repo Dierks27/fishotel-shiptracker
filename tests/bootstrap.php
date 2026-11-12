@@ -1,10 +1,12 @@
 <?php
 /**
- * Shared set-up for the plain-PHP label cost tests (tests/label-cost-*.php).
+ * Shared set-up for the plain-PHP tests (tests/label-cost-*.php,
+ * tests/supplies-*.php, tests/ship-mode-test.php).
  *
  * No WordPress, WooCommerce or MySQL: the WordPress functions the plugin
  * classes touch are stubbed, `$wpdb` is an in-memory fake that understands
- * the few query shapes FST_Shipment uses, and WC_Order is a minimal double.
+ * the few query shapes FST_Shipment and FST_Supplies use, and WC_Order is a
+ * minimal double.
  *
  * @package FisHotel_ShipTracker
  */
@@ -29,6 +31,12 @@ $fst_test_now = '2026-11-02 09:00:00';
 
 /** @var array order id => WC_Order double returned by wc_get_order(). */
 $fst_test_orders = array();
+
+/** @var array filter name => callable( $value, ...$args ) run by apply_filters(). */
+$fst_test_filters = array();
+
+/** @var int What get_current_user_id() returns. */
+$fst_test_user_id = 7;
 
 function absint( $maybeint ) {
     return abs( (int) $maybeint );
@@ -80,6 +88,30 @@ function wc_get_order( $order_id ) {
     return isset( $fst_test_orders[ (int) $order_id ] ) ? $fst_test_orders[ (int) $order_id ] : false;
 }
 
+/**
+ * The one shape the plugin uses: orders whose meta_key equals meta_value, as ids.
+ */
+function wc_get_orders( $args ) {
+    global $fst_test_orders;
+    $ids = array();
+    foreach ( $fst_test_orders as $order_id => $order ) {
+        if ( (string) $order->get_meta( $args['meta_key'] ) === (string) $args['meta_value'] ) {
+            $ids[] = $order_id;
+        }
+    }
+    return $ids;
+}
+
+function apply_filters( $hook, $value, ...$args ) {
+    global $fst_test_filters;
+    return isset( $fst_test_filters[ $hook ] ) ? call_user_func_array( $fst_test_filters[ $hook ], array_merge( array( $value ), $args ) ) : $value;
+}
+
+function get_current_user_id() {
+    global $fst_test_user_id;
+    return $fst_test_user_id;
+}
+
 class WP_Error {
     private $code;
     private $message;
@@ -103,12 +135,18 @@ class WP_Error {
 // ---------------------------------------------------------------------------
 
 class FST_Test_Order_Item {
+    private $quantity;
+
+    public function __construct( $quantity = 1 ) {
+        $this->quantity = $quantity;
+    }
+
     public function get_name() {
         return 'Item';
     }
 
     public function get_quantity() {
-        return 1;
+        return $this->quantity;
     }
 }
 
@@ -119,11 +157,25 @@ class WC_Order {
     private $status;
     public $notes = array();
 
+    /** @var array item id => quantity, for items that are not a single fish. */
+    public $quantities = array();
+
+    /** @var int How often save() ran. */
+    public $saves = 0;
+
     public function __construct( $id, array $item_ids = array(), array $meta = array(), $status = 'processing' ) {
         $this->id       = (int) $id;
         $this->item_ids = $item_ids;
         $this->meta     = $meta;
         $this->status   = $status;
+    }
+
+    public function update_meta_data( $key, $value ) {
+        $this->meta[ $key ] = $value;
+    }
+
+    public function delete_meta_data( $key ) {
+        unset( $this->meta[ $key ] );
     }
 
     public function get_id() {
@@ -141,7 +193,7 @@ class WC_Order {
     public function get_items() {
         $items = array();
         foreach ( $this->item_ids as $item_id ) {
-            $items[ $item_id ] = new FST_Test_Order_Item();
+            $items[ $item_id ] = new FST_Test_Order_Item( isset( $this->quantities[ $item_id ] ) ? $this->quantities[ $item_id ] : 1 );
         }
         return $items;
     }
@@ -159,6 +211,7 @@ class WC_Order {
     }
 
     public function save() {
+        $this->saves++;
         return $this->id;
     }
 }
@@ -168,15 +221,20 @@ class WC_Order {
 // ---------------------------------------------------------------------------
 
 /**
- * Understands exactly what FST_Shipment needs: insert / update / delete by
- * column => value, and `SELECT * FROM t WHERE a = x [AND b = y] [ORDER BY c
- * ASC|DESC] [LIMIT n]`. Any other query throws, so a test never passes on a
- * query the fake silently ignored. Text is compared without regard to letter
- * case, like MySQL's default collation.
+ * Understands exactly what FST_Shipment and FST_Supplies need: insert /
+ * update / delete by column => value, `SELECT * FROM t [WHERE a = x [AND
+ * b = y]] [ORDER BY c ASC|DESC] [LIMIT n]`, and the stock sum `SELECT
+ * supply_id, SUM(col) AS total FROM t WHERE supply_id > 0 GROUP BY
+ * supply_id`. Any other query throws, so a test never passes on a query the
+ * fake silently ignored. Text is compared without regard to letter case,
+ * like MySQL's default collation.
  */
 class FST_Test_WPDB {
     public $prefix    = 'wp_';
     public $insert_id = 0;
+
+    /** @var string[] Every SELECT that ran, so a test can count them. */
+    public $queries = array();
 
     /** @var array table => list of rows (column => value). */
     public $tables = array();
@@ -271,12 +329,30 @@ class FST_Test_WPDB {
     public function get_results( $sql ) {
         $sql = trim( preg_replace( '/\s+/', ' ', $sql ) );
 
-        if ( ! preg_match( '/^SELECT \* FROM (\w+) WHERE (.+?)(?: ORDER BY (\w+) (ASC|DESC))?(?: LIMIT (\d+))?$/', $sql, $m ) ) {
-            throw new Exception( 'FST_Test_WPDB cannot run: ' . $sql );
+        // The stock sums: one row per supply.
+        if ( preg_match( '/^SELECT supply_id, SUM\((\w+)\) AS total FROM (\w+) WHERE supply_id > 0 GROUP BY supply_id$/', $sql, $m ) ) {
+            $this->queries[] = $sql;
+
+            $totals = array();
+            foreach ( isset( $this->tables[ $m[2] ] ) ? $this->tables[ $m[2] ] : array() as $row ) {
+                if ( (int) $row['supply_id'] > 0 ) {
+                    $totals[ (int) $row['supply_id'] ] = ( isset( $totals[ (int) $row['supply_id'] ] ) ? $totals[ (int) $row['supply_id'] ] : 0 ) + (float) $row[ $m[1] ];
+                }
+            }
+            $objects = array();
+            foreach ( $totals as $supply_id => $total ) {
+                $objects[] = (object) array( 'supply_id' => $supply_id, 'total' => number_format( $total, 2, '.', '' ) );
+            }
+            return $objects;
         }
 
+        if ( ! preg_match( '/^SELECT \* FROM (\w+)(?: WHERE (.+?))?(?: ORDER BY (\w+) (ASC|DESC))?(?: LIMIT (\d+))?$/', $sql, $m ) ) {
+            throw new Exception( 'FST_Test_WPDB cannot run: ' . $sql );
+        }
+        $this->queries[] = $sql;
+
         $where = array();
-        foreach ( explode( ' AND ', $m[2] ) as $condition ) {
+        foreach ( isset( $m[2] ) && '' !== $m[2] ? explode( ' AND ', $m[2] ) : array() as $condition ) {
             if ( ! preg_match( '/^(\w+) = (\d+|\'(?:[^\'\\\\]|\\\\.)*\')$/', trim( $condition ), $c ) ) {
                 throw new Exception( 'FST_Test_WPDB cannot run: ' . $sql );
             }
@@ -384,6 +460,8 @@ require_once ABSPATH . 'includes/carriers/class-fst-carrier.php';
 require_once ABSPATH . 'includes/carriers/class-fst-carrier-ups.php';
 require_once ABSPATH . 'includes/carriers/class-fst-carrier-usps.php';
 require_once ABSPATH . 'includes/class-fst-label-cost.php';
+require_once ABSPATH . 'includes/class-fst-supplies.php';
+require_once ABSPATH . 'includes/class-fst-ship-mode.php';
 require_once ABSPATH . 'includes/class-fst-shipment.php';
 require_once ABSPATH . 'includes/class-fst-settings.php';
 require_once ABSPATH . 'includes/class-fst-order.php';

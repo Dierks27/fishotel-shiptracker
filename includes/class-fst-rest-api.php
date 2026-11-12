@@ -70,6 +70,11 @@ class FST_REST_API {
                 'label_source'    => array(
                     'description' => 'Optional. Where the label was bought — a name from GET /shipping-options, or free text (40 characters).',
                 ),
+                // What went into the box besides the label. Left out, a standard
+                // box records its usual materials; sent, it is taken as it is.
+                'materials'       => array(
+                    'description' => 'Optional. { lines: [ { supply_id or supply (name), qty } ], foam_cost, paper_cost }. Supplies are listed by GET /shipping-options.',
+                ),
             ),
         ) );
 
@@ -81,7 +86,15 @@ class FST_REST_API {
             'permission_callback' => array( $this, 'admin_check' ),
         ) );
 
-        // Standard boxes + label sources a caller may pick from (admin).
+        // How an order with no label of its own went out (admin): a local
+        // pickup, or in another order's box. Order meta only.
+        register_rest_route( $this->namespace, '/order/(?P<id>\d+)/ship-mode', array(
+            'methods'             => WP_REST_Server::CREATABLE,
+            'callback'            => array( $this, 'set_order_ship_mode' ),
+            'permission_callback' => array( $this, 'admin_check' ),
+        ) );
+
+        // Standard boxes, label sources and supplies a caller may pick from (admin).
         register_rest_route( $this->namespace, '/shipping-options', array(
             'methods'             => WP_REST_Server::READABLE,
             'callback'            => array( $this, 'get_shipping_options' ),
@@ -164,6 +177,7 @@ class FST_REST_API {
             'fst_order_not_found'    => 404,
             'fst_shipment_not_found' => 404,
             'fst_duplicate_tracking' => 409,
+            'fst_order_has_shipments' => 409,
             'fst_create_failed'      => 500,
             'fst_cost_save_failed'   => 500,
         );
@@ -183,6 +197,7 @@ class FST_REST_API {
      * The four cost fields on `shipment` are the BOX's values (read by
      * tracking number — this row may hold NULL when a sibling row carries
      * them), and `shared_box` says whether other orders are in the same box.
+     * `materials`, `materials_total` and `total_cost` are the box's too.
      */
     public function get_shipment( $request ) {
         $shipment = FST_Shipment::get( absint( $request['id'] ) );
@@ -192,10 +207,10 @@ class FST_REST_API {
         }
 
         $box = FST_Shipment::get_box_cost( $shipment->tracking_number );
-        foreach ( FST_Label_Cost::FIELDS as $field ) {
-            $shipment->$field = $box ? $box[ $field ] : null;
+        $box = $box ? FST_Shipment::with_materials( $box ) : null;
+        foreach ( array_merge( FST_Label_Cost::FIELDS, array( 'shared_box', 'materials', 'materials_total', 'total_cost' ) ) as $field ) {
+            $shipment->$field = $box ? $box[ $field ] : ( 'shared_box' === $field ? false : null );
         }
-        $shipment->shared_box = $box ? $box['shared_box'] : false;
 
         $events = FST_Shipment::get_events( $shipment->id );
 
@@ -230,6 +245,11 @@ class FST_REST_API {
                 $args[ $field ] = $value;
             }
         }
+        // has_param(): materials sent as null means "record none", which is
+        // not the same as leaving the key out (a standard box's defaults).
+        if ( $request->has_param( 'materials' ) ) {
+            $args['materials'] = $request->get_param( 'materials' );
+        }
 
         $result = $this->order_service()->add_tracking( $args );
 
@@ -243,14 +263,15 @@ class FST_REST_API {
     /**
      * POST /shipment/{id}/cost
      *
-     * Body: any of label_cost, box_weight, box_dims, label_source. A key
-     * sent with an empty value (or JSON null) clears that field; a key that
-     * is not sent is left as it is. Delegates to FST_Order::set_label_cost(),
-     * which writes to the box of the shipment's tracking number.
+     * Body: any of label_cost, box_weight, box_dims, label_source, materials.
+     * A key sent with an empty value (or JSON null) clears that field; a key
+     * that is not sent is left as it is. Delegates to
+     * FST_Order::set_label_cost(), which writes to the box of the shipment's
+     * tracking number.
      */
     public function set_shipment_cost( $request ) {
         $args = array();
-        foreach ( FST_Label_Cost::FIELDS as $field ) {
+        foreach ( array_merge( FST_Label_Cost::FIELDS, array( 'materials' ) ) as $field ) {
             // has_param(), not get_param(): an explicit null must count as sent.
             if ( $request->has_param( $field ) ) {
                 $args[ $field ] = $request->get_param( $field );
@@ -267,15 +288,56 @@ class FST_REST_API {
     }
 
     /**
+     * POST /order/{id}/ship-mode
+     *
+     * Body: mode (label | local | with_order), with_order_id (with_order),
+     * optional date (Y-m-d) and, for a local pickup, optional materials.
+     * Delegates to FST_Order::set_ship_mode(). 409 when the order has a
+     * label of its own.
+     */
+    public function set_order_ship_mode( $request ) {
+        $args = array();
+        foreach ( array( 'mode', 'with_order_id', 'date', 'materials' ) as $field ) {
+            if ( $request->has_param( $field ) ) {
+                $args[ $field ] = $request->get_param( $field );
+            }
+        }
+
+        $result = $this->order_service()->set_ship_mode( absint( $request['id'] ), $args );
+
+        if ( is_wp_error( $result ) ) {
+            return $this->error_response( $result );
+        }
+
+        return new WP_REST_Response( $result, 200 );
+    }
+
+    /**
      * GET /shipping-options
      *
-     * The standard boxes and label sources saved under Settings → Boxes &
-     * label costs, so a script can send values the reports will group.
+     * What is saved under Settings → Boxes & label costs, so a script can
+     * send values the reports will group: the standard boxes — each with
+     * what it starts with (foam_cost, paper_cost, paper_feet, ice_packs and
+     * supply_id, the id of the box's own supply or null) — the label
+     * sources, the supplies (id, name, unit, role, price_each, on_hand …),
+     * the foam waste percent and the ship modes.
      */
     public function get_shipping_options() {
+        $supplies = FST_Supplies::get_supplies();
+
+        $boxes = array();
+        foreach ( FST_Settings::get_standard_boxes() as $box ) {
+            $supply           = FST_Supplies::supply_for_role( 'box', $supplies, $box['name'] );
+            $box['supply_id'] = $supply ? $supply['id'] : null;
+            $boxes[]          = $box;
+        }
+
         return new WP_REST_Response( array(
-            'standard_boxes' => FST_Settings::get_standard_boxes(),
-            'label_sources'  => FST_Settings::get_label_sources(),
+            'standard_boxes'     => $boxes,
+            'label_sources'      => FST_Settings::get_label_sources(),
+            'supplies'           => $supplies,
+            'foam_waste_percent' => FST_Supplies::get_waste_percent(),
+            'ship_modes'         => FST_Ship_Mode::MODES,
         ), 200 );
     }
 

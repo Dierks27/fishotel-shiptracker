@@ -21,6 +21,7 @@ class FST_Settings {
     public function __construct() {
         add_action( 'admin_init', array( $this, 'handle_form_submission' ) );
         add_action( 'admin_init', array( $this, 'handle_label_cost_import' ) );
+        add_action( 'admin_init', array( $this, 'handle_supply_action' ) );
     }
 
     /**
@@ -33,6 +34,10 @@ class FST_Settings {
      * @return array[] [ { name, length, width, height, dims } ] — sizes in
      *                 inches as number strings ("10", "12.5"); `dims` is the
      *                 normalised "LxWxH" stored on a shipment (box_dims).
+     *                 Since 1.9.18 also what the box starts with: foam_cost
+     *                 and paper_cost (flat amounts, "0.00" by default),
+     *                 paper_feet (feet of paper per box, '' when not given)
+     *                 and ice_packs (how many when cooling is needed, "0").
      */
     public static function get_standard_boxes() {
         $boxes = array();
@@ -60,10 +65,12 @@ class FST_Settings {
     /**
      * Clean a submitted (or stored) list of standard boxes: a row needs a
      * name and three sizes above 0; anything else is dropped, as is a second
-     * box with the same name.
+     * box with the same name. The four materials fields are optional and
+     * fall back to "nothing": a flat amount that does not read as money is
+     * 0.00, not an error.
      *
-     * @param mixed $raw [ { name, length, width, height } ]
-     * @return array[] [ { name, length, width, height } ]
+     * @param mixed $raw [ { name, length, width, height, foam_cost, paper_cost, paper_feet, ice_packs } ]
+     * @return array[] [ { name, length, width, height, foam_cost, paper_cost, paper_feet, ice_packs } ]
      */
     public static function sanitize_standard_boxes( $raw ) {
         $boxes = array();
@@ -93,15 +100,34 @@ class FST_Settings {
             $seen[ $key ] = true;
 
             list( $length, $width, $height ) = explode( 'x', $dims );
+            $paper_feet = FST_Supplies::parse_qty( isset( $row['paper_feet'] ) ? $row['paper_feet'] : null );
+            $ice_packs  = FST_Supplies::parse_qty( isset( $row['ice_packs'] ) ? $row['ice_packs'] : null );
+
             $boxes[] = array(
-                'name'   => $name,
-                'length' => $length,
-                'width'  => $width,
-                'height' => $height,
+                'name'       => $name,
+                'length'     => $length,
+                'width'      => $width,
+                'height'     => $height,
+                'foam_cost'  => self::flat_amount( isset( $row['foam_cost'] ) ? $row['foam_cost'] : null ),
+                'paper_cost' => self::flat_amount( isset( $row['paper_cost'] ) ? $row['paper_cost'] : null ),
+                'paper_feet' => is_int( $paper_feet ) && $paper_feet > 0 ? FST_Label_Cost::trim_decimal( FST_Supplies::format_qty( $paper_feet ) ) : '',
+                'ice_packs'  => is_int( $ice_packs ) ? FST_Label_Cost::trim_decimal( FST_Supplies::format_qty( $ice_packs ) ) : '0',
             );
         }
 
         return $boxes;
+    }
+
+    /**
+     * A flat amount of a standard box (foam cost, paper cost): money of 0 or
+     * more, "0.00" when empty or not an amount.
+     *
+     * @param mixed $raw
+     * @return string
+     */
+    private static function flat_amount( $raw ) {
+        $amount = FST_Label_Cost::parse_money( $raw );
+        return is_string( $amount ) ? $amount : '0.00';
     }
 
     /**
@@ -263,8 +289,9 @@ class FST_Settings {
                 <?php endif; ?>
             </form>
 
-            <?php // The import posts a file, so it is its own form below the settings form (same tab). ?>
+            <?php // Purchases, recounts and the import are forms of their own, below the settings form (same tab). ?>
             <div class="fst-tab-content <?php echo 'boxes' === $tab ? 'active' : ''; ?>" data-fst-tab="boxes">
+                <?php $this->render_supplies_log(); ?>
                 <?php $this->render_label_cost_import( $imported ); ?>
             </div>
 
@@ -719,43 +746,101 @@ class FST_Settings {
     }
 
     /**
-     * Render the Boxes & label costs tab: the standard boxes and the label
-     * sources. Both lists start empty — nothing is seeded.
+     * Render the Boxes & label costs tab: the standard boxes (with what each
+     * starts with), the label sources and the supplies. All three lists
+     * start empty — nothing is seeded.
      */
     private function render_boxes_tab() {
-        $boxes   = self::get_standard_boxes();
-        $sources = self::get_label_sources();
+        $boxes    = self::get_standard_boxes();
+        $sources  = self::get_label_sources();
+        $supplies = FST_Supplies::get_supplies();
+        $waste    = FST_Supplies::get_waste_percent();
+
+        // What the suggestions are worked out from: the latest foam and paper purchase.
+        $latest      = FST_Supplies::latest_by_supply( FST_Supplies::get_purchases() );
+        $foam        = FST_Supplies::supply_for_role( 'foam', $supplies );
+        $paper       = FST_Supplies::supply_for_role( 'paper', $supplies );
+        $foam_bought = $foam && isset( $latest[ $foam['id'] ] ) ? $latest[ $foam['id'] ] : null;
+        $roll_bought = $paper && isset( $latest[ $paper['id'] ] ) ? $latest[ $paper['id'] ] : null;
+
+        $box_names = array();
+        foreach ( $boxes as $box ) {
+            $box_names[] = $box['name'];
+        }
 
         // Always end with one blank row to type into.
-        $boxes[]   = array( 'name' => '', 'length' => '', 'width' => '', 'height' => '' );
-        $sources[] = '';
+        $boxes[]    = array( 'name' => '', 'length' => '', 'width' => '', 'height' => '', 'foam_cost' => '', 'paper_cost' => '', 'paper_feet' => '', 'ice_packs' => '' );
+        $sources[]  = '';
+        $supplies[] = array( 'id' => '', 'name' => '', 'unit' => '', 'counted' => false, 'reorder_level' => null, 'role' => '', 'box_name' => '', 'price_each' => null, 'on_hand' => null, 'recount_needed' => false, 'low' => false );
 
         ?>
         <h3><?php esc_html_e( 'Standard Boxes', 'fishotel-shiptracker' ); ?></h3>
-        <p class="description" style="max-width: 640px;">
+        <p class="description" style="max-width: 900px;">
             <?php esc_html_e( 'The boxes you usually ship in, in inches. They are offered as a dropdown wherever a label cost is entered; a custom size can always be typed instead. A row needs a name and all three sizes to be saved.', 'fishotel-shiptracker' ); ?>
+            <?php esc_html_e( 'Foam cost and paper cost are your ballpark per box — two separate flat amounts that a box of this size starts with (a custom box starts at 0). Ice packs is how many go in when the weather calls for cooling. A suggestion is only shown: click it to fill the field in, then save.', 'fishotel-shiptracker' ); ?>
         </p>
-        <table class="widefat striped fst-list-table" id="fst-standard-boxes" style="max-width: 640px; margin-top: 12px;">
+        <table class="widefat striped fst-list-table" id="fst-standard-boxes" style="max-width: 1100px; margin-top: 12px;">
             <thead>
                 <tr>
                     <th><?php esc_html_e( 'Name', 'fishotel-shiptracker' ); ?></th>
                     <th><?php esc_html_e( 'Length (in)', 'fishotel-shiptracker' ); ?></th>
                     <th><?php esc_html_e( 'Width (in)', 'fishotel-shiptracker' ); ?></th>
                     <th><?php esc_html_e( 'Height (in)', 'fishotel-shiptracker' ); ?></th>
+                    <th><?php esc_html_e( 'Foam cost', 'fishotel-shiptracker' ); ?></th>
+                    <th><?php esc_html_e( 'Paper (ft per box)', 'fishotel-shiptracker' ); ?></th>
+                    <th><?php esc_html_e( 'Paper cost', 'fishotel-shiptracker' ); ?></th>
+                    <th><?php esc_html_e( 'Ice packs when cooling', 'fishotel-shiptracker' ); ?></th>
                     <th></th>
                 </tr>
             </thead>
             <tbody>
-                <?php foreach ( $boxes as $index => $box ) : ?>
+                <?php foreach ( $boxes as $index => $box ) :
+                    $is_saved      = '' !== $box['name'];
+                    $foam_suggest  = $is_saved ? FST_Supplies::foam_suggestion( $box, $foam, $foam_bought, $waste ) : null;
+                    $paper_suggest = $is_saved ? FST_Supplies::paper_suggestion( $box, $roll_bought ) : null;
+                    ?>
                     <tr class="fst-list-row">
                         <td>
                             <input type="text" name="fst_standard_boxes[<?php echo esc_attr( $index ); ?>][name]" value="<?php echo esc_attr( $box['name'] ); ?>" maxlength="40" style="width: 100%;">
                         </td>
                         <?php foreach ( array( 'length', 'width', 'height' ) as $side ) : ?>
                             <td>
-                                <input type="number" name="fst_standard_boxes[<?php echo esc_attr( $index ); ?>][<?php echo esc_attr( $side ); ?>]" value="<?php echo esc_attr( $box[ $side ] ); ?>" min="0" step="0.01" style="width: 90px;">
+                                <input type="number" name="fst_standard_boxes[<?php echo esc_attr( $index ); ?>][<?php echo esc_attr( $side ); ?>]" value="<?php echo esc_attr( $box[ $side ] ); ?>" min="0" step="0.01" style="width: 80px;">
                             </td>
                         <?php endforeach; ?>
+                        <td>
+                            <input type="number" name="fst_standard_boxes[<?php echo esc_attr( $index ); ?>][foam_cost]" value="<?php echo esc_attr( $box['foam_cost'] ); ?>" min="0" step="0.01" placeholder="0.00" style="width: 90px;">
+                            <div class="fst-row-info" style="font-size: 12px; margin-top: 2px;">
+                                <?php if ( $foam_suggest ) : ?>
+                                    <a href="#" class="fst-suggestion" data-value="<?php echo esc_attr( $foam_suggest['cost'] ); ?>" title="<?php esc_attr_e( 'Click to fill it in', 'fishotel-shiptracker' ); ?>"><?php
+                                        /* translators: %s: suggested amount */
+                                        echo wp_kses_post( sprintf( __( 'Suggested: %s', 'fishotel-shiptracker' ), wc_price( $foam_suggest['cost'] ) ) );
+                                    ?></a><br>
+                                    <span style="color: #666;"><?php
+                                        /* translators: 1: the working, e.g. "4.2 sq ft of a 32 sq ft sheet", 2: waste percent */
+                                        echo esc_html( sprintf( __( '%1$s, plus %2$s%% waste', 'fishotel-shiptracker' ), $foam_suggest['text'], FST_Label_Cost::trim_decimal( number_format( $foam_suggest['waste_percent'], 2, '.', '' ) ) ) );
+                                    ?></span>
+                                <?php endif; ?>
+                            </div>
+                        </td>
+                        <td>
+                            <input type="number" name="fst_standard_boxes[<?php echo esc_attr( $index ); ?>][paper_feet]" value="<?php echo esc_attr( $box['paper_feet'] ); ?>" min="0" step="0.01" style="width: 80px;">
+                        </td>
+                        <td>
+                            <input type="number" name="fst_standard_boxes[<?php echo esc_attr( $index ); ?>][paper_cost]" value="<?php echo esc_attr( $box['paper_cost'] ); ?>" min="0" step="0.01" placeholder="0.00" style="width: 90px;">
+                            <div class="fst-row-info" style="font-size: 12px; margin-top: 2px;">
+                                <?php if ( $paper_suggest ) : ?>
+                                    <a href="#" class="fst-suggestion" data-value="<?php echo esc_attr( $paper_suggest['cost'] ); ?>" title="<?php esc_attr_e( 'Click to fill it in', 'fishotel-shiptracker' ); ?>"><?php
+                                        /* translators: %s: suggested amount */
+                                        echo wp_kses_post( sprintf( __( 'Suggested: %s', 'fishotel-shiptracker' ), wc_price( $paper_suggest['cost'] ) ) );
+                                    ?></a><br>
+                                    <span style="color: #666;"><?php echo esc_html( $paper_suggest['text'] ); ?></span>
+                                <?php endif; ?>
+                            </div>
+                        </td>
+                        <td>
+                            <input type="number" name="fst_standard_boxes[<?php echo esc_attr( $index ); ?>][ice_packs]" value="<?php echo esc_attr( $box['ice_packs'] ); ?>" min="0" step="1" placeholder="0" style="width: 70px;">
+                        </td>
                         <td>
                             <a href="#" class="fst-list-remove" title="<?php esc_attr_e( 'Remove this box', 'fishotel-shiptracker' ); ?>">&times; <?php esc_html_e( 'Remove', 'fishotel-shiptracker' ); ?></a>
                         </td>
@@ -765,6 +850,18 @@ class FST_Settings {
         </table>
         <p>
             <button type="button" class="button fst-list-add" data-target="#fst-standard-boxes"><?php esc_html_e( 'Add another box', 'fishotel-shiptracker' ); ?></button>
+        </p>
+        <p>
+            <label for="fst_foam_waste_percent"><?php esc_html_e( 'Foam waste', 'fishotel-shiptracker' ); ?></label>
+            <input type="number" id="fst_foam_waste_percent" name="fst_foam_waste_percent" value="<?php echo esc_attr( $waste ); ?>" min="0" max="100" step="0.1" style="width: 80px;"> %
+            <span class="description">
+                <?php esc_html_e( 'Added to a suggested foam cost for the offcuts. The suggestion is the box surface, all six sides, 2 × (L×W + L×H + W×H), at the price per square foot of your latest foam purchase.', 'fishotel-shiptracker' ); ?>
+                <?php if ( ! $foam ) : ?>
+                    <?php esc_html_e( 'No supply is marked as foam yet, so there is no foam suggestion.', 'fishotel-shiptracker' ); ?>
+                <?php elseif ( ! $foam_bought ) : ?>
+                    <?php esc_html_e( 'No foam purchase is logged yet, so there is no foam suggestion.', 'fishotel-shiptracker' ); ?>
+                <?php endif; ?>
+            </span>
         </p>
 
         <h3 style="margin-top: 30px;"><?php esc_html_e( 'Label Sources', 'fishotel-shiptracker' ); ?></h3>
@@ -794,7 +891,411 @@ class FST_Settings {
         <p>
             <button type="button" class="button fst-list-add" data-target="#fst-label-sources"><?php esc_html_e( 'Add another source', 'fishotel-shiptracker' ); ?></button>
         </p>
+
+        <h3 style="margin-top: 30px;" id="fst-supplies-list"><?php esc_html_e( 'Supplies', 'fishotel-shiptracker' ); ?></h3>
+        <?php self::render_reorder_notice( FST_Supplies::get_low_supplies() ); ?>
+        <p class="description" style="max-width: 900px;">
+            <?php esc_html_e( 'Everything else a box costs: the boxes themselves, fish bags, heat packs, ice packs, foam, paper — and anything else you want on the books. "Count it down" keeps a count: what you bought, less what went into boxes. "Used as" lets a new box find the supply by itself: one heat pack when the weather check says heat pack, the box\'s ice packs when it says cooling, one fish bag per fish, and one of the box\'s own supply. Only one supply can have each use (a box supply: one per standard box). Save the list, then log what you bought below.', 'fishotel-shiptracker' ); ?>
+        </p>
+        <datalist id="fst-supply-units">
+            <option value="each"></option>
+            <option value="sheets"></option>
+            <option value="feet"></option>
+        </datalist>
+        <table class="widefat striped fst-list-table" id="fst-supplies" style="max-width: 1100px; margin-top: 12px;">
+            <thead>
+                <tr>
+                    <th><?php esc_html_e( 'Name', 'fishotel-shiptracker' ); ?></th>
+                    <th><?php esc_html_e( 'Unit', 'fishotel-shiptracker' ); ?></th>
+                    <th><?php esc_html_e( 'Count it down', 'fishotel-shiptracker' ); ?></th>
+                    <th><?php esc_html_e( 'Reorder at', 'fishotel-shiptracker' ); ?></th>
+                    <th><?php esc_html_e( 'Used as', 'fishotel-shiptracker' ); ?></th>
+                    <th><?php esc_html_e( 'Price each now', 'fishotel-shiptracker' ); ?></th>
+                    <th><?php esc_html_e( 'On hand', 'fishotel-shiptracker' ); ?></th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody>
+                <?php foreach ( $supplies as $index => $supply ) :
+                    $role_value = 'box' === $supply['role'] ? 'box:' . $supply['box_name'] : $supply['role'];
+                    $field      = 'fst_supplies[' . $index . ']';
+                    ?>
+                    <tr class="fst-list-row">
+                        <td>
+                            <input type="hidden" name="<?php echo esc_attr( $field ); ?>[id]" value="<?php echo esc_attr( $supply['id'] ); ?>">
+                            <input type="text" name="<?php echo esc_attr( $field ); ?>[name]" value="<?php echo esc_attr( $supply['name'] ); ?>" maxlength="60" style="width: 100%;">
+                        </td>
+                        <td>
+                            <input type="text" name="<?php echo esc_attr( $field ); ?>[unit]" value="<?php echo esc_attr( $supply['unit'] ); ?>" list="fst-supply-units" maxlength="20" placeholder="each" style="width: 90px;">
+                        </td>
+                        <td>
+                            <input type="checkbox" name="<?php echo esc_attr( $field ); ?>[counted]" value="1" <?php checked( $supply['counted'] ); ?>>
+                        </td>
+                        <td>
+                            <input type="number" name="<?php echo esc_attr( $field ); ?>[reorder_level]" value="<?php echo esc_attr( null === $supply['reorder_level'] ? '' : FST_Label_Cost::trim_decimal( $supply['reorder_level'] ) ); ?>" min="0" step="0.01" style="width: 80px;">
+                        </td>
+                        <td>
+                            <select name="<?php echo esc_attr( $field ); ?>[role]" class="fst-supply-role">
+                                <option value=""><?php esc_html_e( '— Nothing automatic —', 'fishotel-shiptracker' ); ?></option>
+                                <?php foreach ( FST_Supplies::role_labels() as $role => $role_label ) : ?>
+                                    <?php if ( 'box' === $role ) { continue; } ?>
+                                    <option value="<?php echo esc_attr( $role ); ?>" <?php selected( $role_value, $role ); ?>><?php echo esc_html( $role_label ); ?></option>
+                                <?php endforeach; ?>
+                                <?php foreach ( $box_names as $box_name ) : ?>
+                                    <option value="<?php echo esc_attr( 'box:' . $box_name ); ?>" <?php selected( $role_value, 'box:' . $box_name ); ?>><?php
+                                        /* translators: %s: standard box name */
+                                        echo esc_html( sprintf( __( 'The box: %s', 'fishotel-shiptracker' ), $box_name ) );
+                                    ?></option>
+                                <?php endforeach; ?>
+                            </select>
+                            <div class="fst-foam-sheet" style="margin-top: 4px; font-size: 12px;<?php echo 'foam' === $supply['role'] ? '' : ' display: none;'; ?>">
+                                <?php esc_html_e( 'A sheet is', 'fishotel-shiptracker' ); ?>
+                                <input type="number" name="<?php echo esc_attr( $field ); ?>[sheet_length]" value="<?php echo esc_attr( isset( $supply['sheet_length'] ) ? $supply['sheet_length'] : '' ); ?>" min="0" step="0.01" placeholder="8" style="width: 60px;"> ft &times;
+                                <input type="number" name="<?php echo esc_attr( $field ); ?>[sheet_width]" value="<?php echo esc_attr( isset( $supply['sheet_width'] ) ? $supply['sheet_width'] : '' ); ?>" min="0" step="0.01" placeholder="4" style="width: 60px;"> ft,
+                                <input type="number" name="<?php echo esc_attr( $field ); ?>[thickness]" value="<?php echo esc_attr( isset( $supply['thickness'] ) ? $supply['thickness'] : '' ); ?>" min="0" step="0.01" placeholder="0.5" style="width: 60px;"> <?php esc_html_e( 'in thick', 'fishotel-shiptracker' ); ?>
+                            </div>
+                        </td>
+                        <td class="fst-row-info">
+                            <?php echo null !== $supply['price_each'] ? wp_kses_post( wc_price( $supply['price_each'], array( 'decimals' => 4 ) ) ) : '&mdash;'; ?>
+                        </td>
+                        <td class="fst-row-info">
+                            <?php if ( null === $supply['on_hand'] ) : ?>
+                                &mdash;
+                            <?php else : ?>
+                                <?php echo esc_html( FST_Label_Cost::trim_decimal( $supply['on_hand'] ) ); ?>
+                                <?php if ( $supply['recount_needed'] ) : ?>
+                                    <span style="color: #b26b00;"><?php esc_html_e( '(recount needed)', 'fishotel-shiptracker' ); ?></span>
+                                <?php elseif ( $supply['low'] ) : ?>
+                                    <span style="color: #dc3545;"><?php esc_html_e( '(reorder)', 'fishotel-shiptracker' ); ?></span>
+                                <?php endif; ?>
+                            <?php endif; ?>
+                        </td>
+                        <td>
+                            <a href="#" class="fst-list-remove" title="<?php esc_attr_e( 'Remove this supply', 'fishotel-shiptracker' ); ?>">&times; <?php esc_html_e( 'Remove', 'fishotel-shiptracker' ); ?></a>
+                        </td>
+                    </tr>
+                <?php endforeach; ?>
+            </tbody>
+        </table>
+        <p>
+            <button type="button" class="button fst-list-add" data-target="#fst-supplies"><?php esc_html_e( 'Add another supply', 'fishotel-shiptracker' ); ?></button>
+            <span class="description"><?php esc_html_e( 'Removing a supply keeps what was already recorded on boxes; its purchases stop counting.', 'fishotel-shiptracker' ); ?></span>
+        </p>
         <?php
+    }
+
+    /**
+     * The reorder notice: supplies at or under their reorder level, with
+     * how many are on hand. Shown at the top of the Supplies list and on
+     * ShipTracker's dashboard widget.
+     *
+     * @param array $low FST_Supplies::get_low_supplies().
+     */
+    public static function render_reorder_notice( array $low ) {
+        if ( empty( $low ) ) {
+            return;
+        }
+        ?>
+        <div class="fst-reorder-notice" style="background: #fff8e5; border: 1px solid #f0d58c; border-left: 4px solid #b26b00; padding: 10px 14px; margin: 10px 0 14px; border-radius: 3px; max-width: 900px;">
+            <strong style="color: #b26b00;"><?php esc_html_e( 'Time to reorder', 'fishotel-shiptracker' ); ?></strong>
+            <ul style="margin: 6px 0 0 18px; list-style: disc; font-size: 13px;">
+                <?php foreach ( $low as $supply ) : ?>
+                    <li>
+                        <?php
+                        printf(
+                            /* translators: 1: supply name, 2: how many are on hand, 3: unit, 4: reorder level */
+                            esc_html__( '%1$s: %2$s %3$s on hand (reorder at %4$s)', 'fishotel-shiptracker' ),
+                            esc_html( $supply['name'] ),
+                            esc_html( FST_Label_Cost::trim_decimal( $supply['on_hand'] ) ),
+                            esc_html( $supply['unit'] ),
+                            esc_html( FST_Label_Cost::trim_decimal( $supply['reorder_level'] ) )
+                        );
+                        if ( $supply['recount_needed'] ) {
+                            echo ' &mdash; <em>' . esc_html__( 'recount needed', 'fishotel-shiptracker' ) . '</em>';
+                        }
+                        ?>
+                    </li>
+                <?php endforeach; ?>
+            </ul>
+        </div>
+        <?php
+    }
+
+    /**
+     * Render "Purchases & stock" (forms of their own, below the settings
+     * form on the Boxes & label costs tab): log / correct / remove a
+     * purchase, and recount a supply that is counted down.
+     */
+    private function render_supplies_log() {
+        $supplies = FST_Supplies::get_supplies();
+
+        $message = get_transient( 'fst_supply_msg_' . get_current_user_id() );
+        if ( isset( $_GET['supplies'] ) && is_array( $message ) ) { // phpcs:ignore WordPress.Security.NonceVerification -- display only.
+            delete_transient( 'fst_supply_msg_' . get_current_user_id() );
+        } else {
+            $message = false;
+        }
+
+        $by_id = array();
+        foreach ( $supplies as $supply ) {
+            $by_id[ $supply['id'] ] = $supply;
+        }
+
+        $purchases = array_reverse( FST_Supplies::get_purchases() );
+        $stock     = FST_Supplies::get_stock();
+        $recounts  = FST_Supplies::get_last_recounts();
+
+        // A purchase being corrected fills the form.
+        $editing = isset( $_GET['edit_purchase'] ) ? FST_Supplies::get_purchase( absint( $_GET['edit_purchase'] ) ) : null; // phpcs:ignore WordPress.Security.NonceVerification -- display only.
+
+        ?>
+        <div id="fst-supplies-log" style="border-top: 2px solid #f0f0f0; margin-top: 30px; padding-top: 10px; max-width: 1100px;">
+            <h3><?php esc_html_e( 'Purchases & stock', 'fishotel-shiptracker' ); ?></h3>
+
+            <?php if ( $message ) : ?>
+                <div class="notice notice-<?php echo 'error' === $message['type'] ? 'error' : 'success'; ?> inline"><p><?php echo esc_html( $message['text'] ); ?></p></div>
+            <?php endif; ?>
+
+            <?php if ( empty( $supplies ) ) : ?>
+                <p class="description"><?php esc_html_e( 'Add your supplies to the list above and save. Then come back here each time you buy a case of heat packs, a sheet of foam or a roll of paper.', 'fishotel-shiptracker' ); ?></p>
+            <?php else : ?>
+                <p class="description" style="max-width: 900px;">
+                    <?php esc_html_e( 'Log it when you buy more: how many came in the case (sheets of foam, feet of paper on the roll) and what you paid in total. The price of one is worked out from the latest purchase, and new boxes use it — boxes already recorded keep the price they were recorded at.', 'fishotel-shiptracker' ); ?>
+                </p>
+
+                <form method="post" autocomplete="off" style="background: #f9f9f9; border: 1px solid #e0e0e0; border-radius: 4px; padding: 10px 14px; margin: 10px 0;">
+                    <?php wp_nonce_field( 'fst_supply_action', 'fst_supply_nonce' ); ?>
+                    <input type="hidden" name="fst_supply_action" value="save_purchase">
+                    <input type="hidden" name="purchase_id" value="<?php echo esc_attr( $editing ? $editing->id : '' ); ?>">
+                    <strong><?php echo $editing ? esc_html__( 'Correct a purchase', 'fishotel-shiptracker' ) : esc_html__( 'Log a purchase', 'fishotel-shiptracker' ); ?></strong><br>
+                    <label style="display: inline-block; margin: 6px 10px 0 0;">
+                        <?php esc_html_e( 'Supply', 'fishotel-shiptracker' ); ?><br>
+                        <select name="supply_id">
+                            <?php foreach ( $supplies as $supply ) : ?>
+                                <option value="<?php echo esc_attr( $supply['id'] ); ?>" <?php selected( $editing ? (int) $editing->supply_id : 0, $supply['id'] ); ?>>
+                                    <?php echo esc_html( $supply['name'] . ' (' . $supply['unit'] . ')' ); ?>
+                                </option>
+                            <?php endforeach; ?>
+                        </select>
+                    </label>
+                    <label style="display: inline-block; margin: 6px 10px 0 0;">
+                        <?php esc_html_e( 'Date', 'fishotel-shiptracker' ); ?><br>
+                        <input type="date" name="purchase_date" value="<?php echo esc_attr( $editing ? $editing->purchase_date : current_time( 'Y-m-d' ) ); ?>">
+                    </label>
+                    <label style="display: inline-block; margin: 6px 10px 0 0;">
+                        <?php esc_html_e( 'How many', 'fishotel-shiptracker' ); ?><br>
+                        <input type="number" name="qty" value="<?php echo esc_attr( $editing ? FST_Label_Cost::trim_decimal( $editing->qty ) : '' ); ?>" min="0" step="0.01" style="width: 100px;">
+                    </label>
+                    <label style="display: inline-block; margin: 6px 10px 0 0;">
+                        <?php esc_html_e( 'Total paid', 'fishotel-shiptracker' ); ?><br>
+                        <input type="text" name="total_paid" inputmode="decimal" value="<?php echo esc_attr( $editing ? $editing->total_paid : '' ); ?>" placeholder="24.00" style="width: 100px;">
+                    </label>
+                    <label style="display: inline-block; margin: 6px 10px 0 0;">
+                        <?php esc_html_e( 'Note (where you bought it)', 'fishotel-shiptracker' ); ?><br>
+                        <input type="text" name="note" value="<?php echo esc_attr( $editing ? $editing->note : '' ); ?>" maxlength="190" style="width: 240px;">
+                    </label>
+                    <button type="submit" class="button button-secondary" style="vertical-align: bottom;">
+                        <?php echo $editing ? esc_html__( 'Save the correction', 'fishotel-shiptracker' ) : esc_html__( 'Log the purchase', 'fishotel-shiptracker' ); ?>
+                    </button>
+                    <?php if ( $editing ) : ?>
+                        <a href="<?php echo esc_url( admin_url( 'admin.php?page=fst-settings&tab=boxes#fst-supplies-log' ) ); ?>" style="margin-left: 8px;"><?php esc_html_e( 'Cancel', 'fishotel-shiptracker' ); ?></a>
+                    <?php endif; ?>
+                </form>
+            <?php endif; ?>
+
+            <?php if ( ! empty( $purchases ) ) : ?>
+                <table class="widefat striped" style="margin-top: 12px;">
+                    <thead>
+                        <tr>
+                            <th><?php esc_html_e( 'Date', 'fishotel-shiptracker' ); ?></th>
+                            <th><?php esc_html_e( 'Supply', 'fishotel-shiptracker' ); ?></th>
+                            <th><?php esc_html_e( 'How many', 'fishotel-shiptracker' ); ?></th>
+                            <th><?php esc_html_e( 'Total paid', 'fishotel-shiptracker' ); ?></th>
+                            <th><?php esc_html_e( 'Price each', 'fishotel-shiptracker' ); ?></th>
+                            <th><?php esc_html_e( 'Note', 'fishotel-shiptracker' ); ?></th>
+                            <th></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <?php foreach ( array_slice( $purchases, 0, 100 ) as $purchase ) :
+                            $bought = isset( $by_id[ (int) $purchase->supply_id ] ) ? $by_id[ (int) $purchase->supply_id ] : null;
+                            $each   = FST_Supplies::price_each( $purchase );
+                            ?>
+                            <tr>
+                                <td><?php echo esc_html( date_i18n( get_option( 'date_format' ), strtotime( $purchase->purchase_date ) ) ); ?></td>
+                                <td>
+                                    <?php if ( $bought ) : ?>
+                                        <?php echo esc_html( $bought['name'] ); ?>
+                                    <?php else : ?>
+                                        <span style="color: #999;"><?php esc_html_e( '(removed supply)', 'fishotel-shiptracker' ); ?></span>
+                                    <?php endif; ?>
+                                </td>
+                                <td><?php echo esc_html( FST_Label_Cost::trim_decimal( $purchase->qty ) . ( $bought ? ' ' . $bought['unit'] : '' ) ); ?></td>
+                                <td><?php echo wp_kses_post( wc_price( $purchase->total_paid ) ); ?></td>
+                                <td><?php echo null !== $each ? wp_kses_post( wc_price( $each, array( 'decimals' => 4 ) ) ) : '&mdash;'; ?></td>
+                                <td><?php echo esc_html( $purchase->note ); ?></td>
+                                <td style="white-space: nowrap;">
+                                    <?php if ( $bought ) : ?>
+                                        <a href="<?php echo esc_url( admin_url( 'admin.php?page=fst-settings&tab=boxes&edit_purchase=' . (int) $purchase->id . '#fst-supplies-log' ) ); ?>"><?php esc_html_e( 'Edit', 'fishotel-shiptracker' ); ?></a>
+                                    <?php endif; ?>
+                                    <form method="post" style="display: inline; margin-left: 8px;" onsubmit="return confirm( '<?php echo esc_js( __( 'Remove this purchase?', 'fishotel-shiptracker' ) ); ?>' );">
+                                        <?php wp_nonce_field( 'fst_supply_action', 'fst_supply_nonce', false ); ?>
+                                        <input type="hidden" name="fst_supply_action" value="delete_purchase">
+                                        <input type="hidden" name="purchase_id" value="<?php echo esc_attr( $purchase->id ); ?>">
+                                        <button type="submit" class="button-link" style="color: #b32d2e;"><?php esc_html_e( 'Delete', 'fishotel-shiptracker' ); ?></button>
+                                    </form>
+                                </td>
+                            </tr>
+                        <?php endforeach; ?>
+                    </tbody>
+                </table>
+                <?php if ( count( $purchases ) > 100 ) : ?>
+                    <p class="description"><?php esc_html_e( 'The latest 100 purchases are listed.', 'fishotel-shiptracker' ); ?></p>
+                <?php endif; ?>
+            <?php endif; ?>
+
+            <?php
+            $counted = array();
+            foreach ( $supplies as $supply ) {
+                if ( $supply['counted'] ) {
+                    $counted[] = $supply;
+                }
+            }
+            ?>
+            <?php if ( ! empty( $counted ) ) : ?>
+                <h4 style="margin: 24px 0 4px;"><?php esc_html_e( 'Stock', 'fishotel-shiptracker' ); ?></h4>
+                <p class="description" style="max-width: 900px;">
+                    <?php esc_html_e( 'On hand = bought − used on boxes ± recounts. Removing a box from an order gives its supplies back. When the shelf and the books disagree, count what is really there and enter it: the difference is kept with the date and who counted.', 'fishotel-shiptracker' ); ?>
+                </p>
+                <table class="widefat striped" style="margin-top: 8px;">
+                    <thead>
+                        <tr>
+                            <th><?php esc_html_e( 'Supply', 'fishotel-shiptracker' ); ?></th>
+                            <th><?php esc_html_e( 'Bought', 'fishotel-shiptracker' ); ?></th>
+                            <th><?php esc_html_e( 'Used', 'fishotel-shiptracker' ); ?></th>
+                            <th><?php esc_html_e( 'Recounts', 'fishotel-shiptracker' ); ?></th>
+                            <th><?php esc_html_e( 'On hand', 'fishotel-shiptracker' ); ?></th>
+                            <th><?php esc_html_e( 'Reorder at', 'fishotel-shiptracker' ); ?></th>
+                            <th><?php esc_html_e( 'Last recount', 'fishotel-shiptracker' ); ?></th>
+                            <th><?php esc_html_e( 'Recount', 'fishotel-shiptracker' ); ?></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <?php foreach ( $counted as $supply ) :
+                            $level   = isset( $stock[ $supply['id'] ] ) ? $stock[ $supply['id'] ] : FST_Supplies::stock_from_totals( 0, 0, 0 );
+                            $recount = isset( $recounts[ $supply['id'] ] ) ? $recounts[ $supply['id'] ] : null;
+                            $counter = $recount && $recount->user_id ? get_userdata( (int) $recount->user_id ) : false;
+                            ?>
+                            <tr>
+                                <td><?php echo esc_html( $supply['name'] ); ?></td>
+                                <td><?php echo esc_html( FST_Label_Cost::trim_decimal( $level['bought'] ) ); ?></td>
+                                <td><?php echo esc_html( FST_Label_Cost::trim_decimal( $level['used'] ) ); ?></td>
+                                <td><?php echo esc_html( ( (float) $level['adjusted'] > 0 ? '+' : '' ) . FST_Label_Cost::trim_decimal( $level['adjusted'] ) ); ?></td>
+                                <td>
+                                    <strong><?php echo esc_html( FST_Label_Cost::trim_decimal( $level['on_hand'] ) . ' ' . $supply['unit'] ); ?></strong>
+                                    <?php if ( $level['recount_needed'] ) : ?>
+                                        <span style="color: #b26b00;"><?php esc_html_e( 'recount needed', 'fishotel-shiptracker' ); ?></span>
+                                    <?php elseif ( $supply['low'] ) : ?>
+                                        <span style="color: #dc3545;"><?php esc_html_e( 'reorder', 'fishotel-shiptracker' ); ?></span>
+                                    <?php endif; ?>
+                                </td>
+                                <td><?php echo null !== $supply['reorder_level'] ? esc_html( FST_Label_Cost::trim_decimal( $supply['reorder_level'] ) ) : '&mdash;'; ?></td>
+                                <td>
+                                    <?php if ( $recount ) : ?>
+                                        <?php
+                                        echo esc_html( sprintf(
+                                            /* translators: 1: date, 2: number counted, 3: correction, 4: who counted */
+                                            __( '%1$s: counted %2$s (%3$s) by %4$s', 'fishotel-shiptracker' ),
+                                            date_i18n( get_option( 'date_format' ), strtotime( $recount->counted_at ) ),
+                                            FST_Label_Cost::trim_decimal( $recount->counted ),
+                                            ( (float) $recount->delta > 0 ? '+' : '' ) . FST_Label_Cost::trim_decimal( $recount->delta ),
+                                            $counter ? $counter->display_name : __( 'someone', 'fishotel-shiptracker' )
+                                        ) );
+                                        ?>
+                                    <?php else : ?>
+                                        &mdash;
+                                    <?php endif; ?>
+                                </td>
+                                <td style="white-space: nowrap;">
+                                    <form method="post" autocomplete="off" style="margin: 0;">
+                                        <?php wp_nonce_field( 'fst_supply_action', 'fst_supply_nonce', false ); ?>
+                                        <input type="hidden" name="fst_supply_action" value="recount">
+                                        <input type="hidden" name="supply_id" value="<?php echo esc_attr( $supply['id'] ); ?>">
+                                        <input type="number" name="counted" min="0" step="0.01" style="width: 80px;" aria-label="<?php esc_attr_e( 'How many are really there', 'fishotel-shiptracker' ); ?>">
+                                        <button type="submit" class="button button-small"><?php esc_html_e( 'Set', 'fishotel-shiptracker' ); ?></button>
+                                    </form>
+                                </td>
+                            </tr>
+                        <?php endforeach; ?>
+                    </tbody>
+                </table>
+            <?php endif; ?>
+        </div>
+        <?php
+    }
+
+    /**
+     * Handle the purchase and recount forms: nonce, capability, then the
+     * change. The outcome is kept for the redirect in a short-lived transient.
+     */
+    public function handle_supply_action() {
+        if ( ! isset( $_POST['fst_supply_nonce'] ) ) {
+            return;
+        }
+
+        if ( ! wp_verify_nonce( sanitize_text_field( wp_unslash( $_POST['fst_supply_nonce'] ) ), 'fst_supply_action' ) ) {
+            wp_die( 'Security check failed' );
+        }
+
+        if ( ! current_user_can( 'manage_woocommerce' ) ) {
+            wp_die( 'Unauthorized access' );
+        }
+
+        $action = isset( $_POST['fst_supply_action'] ) ? sanitize_text_field( wp_unslash( $_POST['fst_supply_action'] ) ) : '';
+        $text   = '';
+        $result = true;
+
+        switch ( $action ) {
+            case 'save_purchase':
+                $args = array();
+                foreach ( array( 'supply_id', 'purchase_date', 'qty', 'total_paid', 'note' ) as $field ) {
+                    $args[ $field ] = isset( $_POST[ $field ] ) && is_scalar( $_POST[ $field ] ) ? sanitize_text_field( wp_unslash( $_POST[ $field ] ) ) : '';
+                }
+                $purchase_id = isset( $_POST['purchase_id'] ) ? absint( $_POST['purchase_id'] ) : 0;
+
+                $result = $purchase_id ? FST_Supplies::update_purchase( $purchase_id, $args ) : FST_Supplies::add_purchase( $args );
+                $text   = $purchase_id ? __( 'Purchase corrected.', 'fishotel-shiptracker' ) : __( 'Purchase logged.', 'fishotel-shiptracker' );
+                break;
+
+            case 'delete_purchase':
+                FST_Supplies::delete_purchase( isset( $_POST['purchase_id'] ) ? absint( $_POST['purchase_id'] ) : 0 );
+                $text = __( 'Purchase removed.', 'fishotel-shiptracker' );
+                break;
+
+            case 'recount':
+                $result = FST_Supplies::recount(
+                    isset( $_POST['supply_id'] ) ? absint( $_POST['supply_id'] ) : 0,
+                    isset( $_POST['counted'] ) && is_scalar( $_POST['counted'] ) ? sanitize_text_field( wp_unslash( $_POST['counted'] ) ) : ''
+                );
+                $text   = __( 'Recount saved.', 'fishotel-shiptracker' );
+                break;
+
+            default:
+                $result = new WP_Error( 'fst_unknown_action', __( 'Nothing was changed.', 'fishotel-shiptracker' ) );
+                break;
+        }
+
+        set_transient(
+            'fst_supply_msg_' . get_current_user_id(),
+            array(
+                'type' => is_wp_error( $result ) ? 'error' : 'success',
+                'text' => is_wp_error( $result ) ? $result->get_error_message() : $text,
+            ),
+            5 * MINUTE_IN_SECONDS
+        );
+
+        wp_safe_redirect( admin_url( 'admin.php?page=fst-settings&tab=boxes&supplies=1#fst-supplies-log' ) );
+        exit;
     }
 
     /**
@@ -1082,6 +1583,17 @@ class FST_Settings {
 
         update_option( 'fst_standard_boxes', self::sanitize_standard_boxes( $boxes ) );
         update_option( 'fst_label_sources', self::sanitize_label_sources( $sources ) );
+
+        // Supplies — after the boxes, because a box supply is tied to one of them by name.
+        // phpcs:ignore WordPress.Security.ValidatedSanitizedInput -- sanitised row by row in FST_Supplies::sanitize_supplies().
+        $supplies = isset( $_POST['fst_supplies'] ) && is_array( $_POST['fst_supplies'] ) ? wp_unslash( $_POST['fst_supplies'] ) : array();
+        $clean    = FST_Supplies::sanitize_supplies( $supplies, self::get_standard_boxes(), (int) get_option( FST_Supplies::OPTION_LAST_ID, 0 ) );
+
+        update_option( FST_Supplies::OPTION, $clean['supplies'] );
+        update_option( FST_Supplies::OPTION_LAST_ID, $clean['last_id'] );
+
+        $waste = isset( $_POST['fst_foam_waste_percent'] ) && is_scalar( $_POST['fst_foam_waste_percent'] ) ? sanitize_text_field( wp_unslash( $_POST['fst_foam_waste_percent'] ) ) : '';
+        update_option( FST_Supplies::OPTION_WASTE, FST_Supplies::get_waste_percent( $waste ) );
     }
 
     /**
