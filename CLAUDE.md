@@ -1,6 +1,6 @@
 # FisHotel ShipTracker - Project Overview & Instruction Manual
 
-**Version:** 1.9.17
+**Version:** 1.9.18
 **Author:** FisHotel
 **Type:** WordPress / WooCommerce Plugin (Proprietary)
 **Repository:** Dierks27/fishotel-shiptracker
@@ -20,6 +20,8 @@ Key capabilities:
 - WordPress admin dashboard widget for at-a-glance status
 - Ship Date column on WooCommerce Orders page
 - Records what each box actually cost to ship (label cost, box size, weight, where the label was bought) and reports it against the shipping customers paid
+- Supplies (boxes, bags, heat packs, ice packs, foam, paper): a purchase log, stock on hand with recounts and a reorder notice, and the materials each box used — so "cost" is label + materials
+- Local pickups and orders that went in another order's box, recorded on the order without inventing a shipment
 - Migration tool for importing from AST/TrackShip plugins
 - Auto-updates from GitHub releases
 
@@ -113,9 +115,18 @@ Customize the customer-facing tracking display colors:
 - **Data Retention** - How long to keep shipment history in days (0 = forever, default 1095 / 3 years)
 
 ### Boxes & label costs
-Two editable lists, both empty until the owner fills them in (nothing is seeded), saved through the normal settings form:
-- **Standard Boxes** - name + length, width, height in inches. Offered as a dropdown wherever a label cost is entered; a box name is also accepted as `box_dims` and stored as its size. Option `fst_standard_boxes`, read with `FST_Settings::get_standard_boxes()`.
+Three editable lists, all empty until the owner fills them in (nothing is seeded), saved through the normal settings form:
+- **Standard Boxes** - name + length, width, height in inches. Offered as a dropdown wherever a label cost is entered; a box name is also accepted as `box_dims` and stored as its size. Since 1.9.18 each box also holds what it starts with: `foam_cost` and `paper_cost` (two separate flat amounts, "0.00" by default), `paper_feet` (feet of paper per box, optional) and `ice_packs` (how many when cooling is needed). Option `fst_standard_boxes`, read with `FST_Settings::get_standard_boxes()`.
 - **Label Sources** - the partners labels are bought through (e.g. "Partner A", "Partner B"). Option `fst_label_sources`, read with `FST_Settings::get_label_sources()`. A shipment may still hold free text that is not on the list.
+- **Supplies** - name, unit (`each` / `sheets` / `feet` / free text), `counted` ("count it down"), `reorder_level` (counted supplies only), and an optional `role` so the rest can find it: `heat_pack`, `ice_pack`, `fish_bag`, `foam`, `paper`, or `box` with `box_name` = one standard box. At most one supply per role, except `box` (one per standard box); a second one keeps its row and loses the role. The `foam` supply also keeps `sheet_length` / `sheet_width` in feet (8 and 4 by default) and `thickness` (0.5 in). Options `fst_supplies` and `fst_supply_last_id` (ids are stable and never reused); read with `FST_Supplies::get_supplies()` (adds `price_each`, `on_hand`, `recount_needed`, `low`) or `get_supplies_raw()` (no database).
+- **Foam waste** - `fst_foam_waste_percent`, 15 by default; only used by the foam suggestion.
+
+Beside each standard box's foam and paper cost a **suggestion** is shown with its working, and filled in only when it is clicked (`.fst-suggestion` in admin.js): foam = box surface 2(LW + LH + WH) in square feet × the price per square foot of the latest foam purchase (total paid ÷ sheets ÷ sheet area) × (1 + waste percent) — `FST_Supplies::foam_suggestion()`; paper = `paper_feet` × the price per foot of the latest paper purchase — `paper_suggestion()`. Nothing uses a suggestion until the owner saves it as the box's amount.
+
+Below the settings form, **Purchases & stock** (forms of their own: `manage_woocommerce` + nonce `fst_supply_action`, handled by `FST_Settings::handle_supply_action()`):
+- **Log / correct / remove a purchase** - supply, date, how many, total paid, note. Table `wp_fst_supply_purchases`. Price each = total paid ÷ how many of the LATEST purchase (by date, then id) — `FST_Supplies::latest_purchase()` / `price_each()`, four decimals.
+- **Stock** (counted supplies) - on hand = bought − used ± recounts (`FST_Supplies::get_stock()`: three `SUM … GROUP BY supply_id` queries). **Recount** sets the real number and stores the difference with the date and who (`wp_fst_supply_counts`). Never negative on screen: below zero shows 0 with "recount needed".
+- **Reorder notice** - counted supplies at or under their reorder level, with on hand: at the top of the Supplies list and on the dashboard widget (`FST_Settings::render_reorder_notice()`), and for other plugins `apply_filters( 'fst_low_supplies', array() )` → `FST_Supplies::get_low_supplies()` rows (`id`, `name`, `unit`, `on_hand`, `reorder_level`, `recount_needed`).
 
 Below the lists, **Import label costs** (its own form: `manage_woocommerce` + nonce `fst_import_label_costs`): upload a CSV (2 MB limit, checked before the file is read) or paste the rows.
 - The header row is required; columns are found by their header text: tracking / tracking number / tracking #, and cost / amount / total / charge / price. Optional: weight (pounds — a column headed oz / kg is ignored), dimensions / box (or separate Length, Width, Height columns), source.
@@ -164,11 +175,53 @@ Helpers on `FST_Shipment` (the theme should probe `method_exists( 'FST_Shipment'
 - `get_box_cost( $tracking_number )` → `tracking_number`, `label_cost`, `box_weight`, `box_dims`, `label_source` (decimal strings; `null` = not recorded), `shared_box`, `order_ids[]`, `shipment_ids[]`, `cost_shipment_id`; `null` when no shipment has that number.
 - `set_box_cost( $tracking_number, array $fields, $preferred_id = 0 )` → only the keys present change; a `null` value clears that field. Leaves `updated_at` alone.
 - `clear_box_cost( $tracking_number )`.
-- `get_order_boxes( $order_ids )` → one entry per distinct tracking number of the order(s), oldest first: the `get_box_cost()` keys plus `shipment_id`, `carrier`, `status`, `ship_date`.
+- `get_order_boxes( $order_ids )` → one entry per distinct tracking number of the order(s), oldest first: the `get_box_cost()` keys plus `shipment_id`, `carrier`, `status`, `ship_date`, and since 1.9.18 `materials`, `materials_total`, `total_cost` (see "Recording What Went Into a Box").
 
-**Changing it later:** `FST_Order::set_label_cost( $shipment_id, array $args )`, behind the AJAX action `fst_set_label_cost` (nonce `fst_nonce` in `nonce`, `manage_woocommerce`; POST `shipment_id` + any of the four fields) and `POST /fst/v1/shipment/{id}/cost`. A field sent empty clears it; a field that is not sent is left alone. It acts on the box of that shipment, whichever row is named. AJAX success data / REST 200 body: `message`, `shipment_id`, `tracking_number`, the four fields, `shared_box`, `order_ids[]`; AJAX errors are a string message, as for `fst_add_tracking`.
+**Changing it later:** `FST_Order::set_label_cost( $shipment_id, array $args )`, behind the AJAX action `fst_set_label_cost` (nonce `fst_nonce` in `nonce`, `manage_woocommerce`; POST `shipment_id` + any of the four fields) and `POST /fst/v1/shipment/{id}/cost`. A field sent empty clears it; a field that is not sent is left alone. It acts on the box of that shipment, whichever row is named. AJAX success data / REST 200 body: `message`, `shipment_id`, `tracking_number`, the four fields, `shared_box`, `order_ids[]`, and since 1.9.18 `materials`, `materials_total`, `total_cost`; AJAX errors are a string message, as for `fst_add_tracking`. `materials` may be posted too (alone or with the four fields).
 
 The plugin's own meta box (used when the theme's Shipments box is off) has the same optional fields on the add form — box as a dropdown of the standard boxes plus "Custom size", source as a dropdown when sources are saved — and shows / edits them on each existing shipment.
+
+### Recording What Went Into a Box (Materials)
+Besides its label a box costs its materials: lines of supply + quantity + unit cost, and two flat amounts (foam, paper). The record is `FST_Supplies::get_box_materials( $tracking_number )`:
+
+```php
+array(
+    'lines'      => array( array( 'supply_id' => 3, 'name' => 'Fish bag', 'role' => 'fish_bag', 'unit' => 'each', 'qty' => '6.00', 'unit_cost' => '0.1100', 'cost' => '0.66' ), … ),
+    'foam_cost'  => '1.80',
+    'paper_cost' => '0.40',
+    'total'      => '4.71',
+    'split'      => array( 'boxes' => '1.25', 'foam' => '1.80', 'paper' => '0.40', 'bags' => '0.66', 'packs' => '0.60', 'other' => '0.00' ),
+)
+```
+or `null` when none are recorded (a record of zero — foam 0.00, paper 0.00, no lines — is not the same as no record).
+
+Rules:
+- **One box, one cost** applies: materials are keyed by tracking number in `wp_fst_supply_usage`, never by shipment row. A fan-out to five source orders stores them once.
+- **Snapshots.** Name, role, unit, unit cost and line cost are copied onto the usage row when recorded; the foam and paper amounts are rows of their own (`kind` = `foam` / `paper`, `supply_id` 0, `qty` 0). A later purchase or settings change never rewrites a recorded box. On an edit, a line already on the box keeps its recorded unit cost; a new line takes the current price each; `unit_cost` on a line overrides both.
+- **Input** (`materials` on `add_tracking()` / `set_label_cost()` / `set_ship_mode()`): `{ lines: [ { supply_id | supply (name), qty, unit_cost? } ], foam_cost, paper_cost }` as an array or a JSON string — `FST_Supplies::normalize_materials()`. Quantities 0 or more with at most 2 decimals (0 removes the line, the same supply twice is added up) → else `fst_invalid_materials`; unknown supply → `fst_unknown_supply`; money as for `label_cost`. Everything is validated before anything is written.
+- **Add** (`fst_add_tracking`, `POST /fst/v1/shipment`): key ABSENT + `box_dims` is a standard box → the defaults below are recorded (only when the box has no materials yet); key present → taken as sent; `null` → none. A custom size records nothing by itself.
+- **Update** (`fst_set_label_cost`, `POST /shipment/{id}/cost`): key absent → left alone; `''` / `null` → removed; inside it `lines`, `foam_cost`, `paper_cost` are each kept when absent. Nothing is defaulted. `materials` alone is a valid body.
+- **Defaults** (`FST_Supplies::default_materials( $box, $supplies, $prices, $fish_count, $action )`): a standard box → 1 of that box's supply (when it has one), its `foam_cost`, its `paper_cost`; any box → fish bags = the fish in the box, 1 heat pack when the action is `heat_pack`; a standard box → its `ice_packs` when the action is `cooling`. A custom box: foam and paper 0.00, no box supply. A role nobody plays adds no line.
+- **Fish in the box** = the sum of the quantities of the shipment's line items (`FST_Supplies::fish_count( $order, $item_ids )`; `null` = all of the order's items; a fan-out adds up its source rows). Filter `fst_box_fish_count` ( `$count`, `$order`, `$item_ids` ).
+- **Weather action** = `FST_Supplies::order_pack_action( $order )`: the order meta `_fh_weather_action` written by the FisHotel Misc plugin's Weather section (`heat_pack`, `none`, `cooling`, `ups_store_cold`, `ups_store_hot`, `hold_cold`, `hold_hot`, `unavailable`), read through `get_meta()` — no dependency on that plugin. A source order without a note takes the note of its wrapper (`_fishotel_fulfilled_by_order`); a note whose `_fh_weather_checked_for` differs from the order's `_fishotel_shipping_date` is not used. Filter `fst_order_pack_action` ( `$action`, `$order` ) supplies or overrides it. Only `heat_pack` and `cooling` add anything.
+- **Stock** follows the usage table: `set_box_materials()` replaces the box's rows (old lines given back, new ones taken); `FST_Shipment::delete()` clears a box's materials when its LAST row is removed (a shared box keeps them while another order's row remains).
+
+Helpers the theme may use (probe `class_exists( 'FST_Supplies' )` / `method_exists( 'FST_Supplies', 'get_default_materials' )`): `get_supplies()`, `get_box_materials()`, `get_order_materials( $order_id )` (a local pickup's), `get_default_materials( $fish_count, $action )` → `{ boxes: [ { name, dims, materials } ], custom: materials }`, `fish_count()`, `order_pack_action()`, `get_low_supplies()`. `FST_Shipment::get_order_boxes()` entries carry `materials`, `materials_total` and `total_cost` (label + materials; `null` while the label cost is not recorded).
+
+The plugin's own meta box shows the materials under the label cost, edits them in the same form (a quantity per supply — foam and paper supplies are left out there, they are the two flat amounts — offering the usual amounts while nothing is recorded) and posts them as a JSON string.
+
+### How It Went Out: Local Pickup / Another Order's Box
+For an order with NO label of its own — `FST_Order::set_ship_mode( $order_id, array $args )`, behind the AJAX action `fst_set_ship_mode` (nonce `fst_nonce` in `nonce`, `manage_woocommerce`; POST `order_id`, `mode`, `with_order_id`, optional `date` Y-m-d, optional `materials`) and `POST /fst/v1/order/{id}/ship-mode`:
+
+| `mode` | Meaning |
+|--------|---------|
+| `local` | Local pickup. A real label cost of zero. May carry `materials` (same shape as a box's), stored in `wp_fst_supply_usage` keyed by the order id (`tracking_number` = '') so they count down like a box's |
+| `with_order` | Went in another order's box: `with_order_id`. That order's box or boxes then count this order's shipping paid against their cost, exactly like a shared fan-out box (split evenly between that order's boxes, spare cents to the earliest) |
+| `label` | Clear it — back to "no shipment yet" (`none` and an empty mode mean the same) |
+
+Stored as order meta through the order object, so it is HPOS-safe: `_fst_ship_mode` (`local` / `with_order`; absent = label), `_fst_ship_with_order`, `_fst_ship_mode_date`, `_fst_ship_mode_by`. It is NEVER a row in `wp_fst_shipments`: no customer e-mail, no status change, no polling — only a private order note. Read it with `FST_Ship_Mode::get( $order )` (`mode`, `with_order_id`, `date`) or `FST_Ship_Mode::describe( $order )` (adds `with_order_number`, `materials`, `materials_total`).
+
+Rules (`FST_Ship_Mode::check()`, pure): the order must have no shipments (`fst_order_has_shipments`, HTTP 409); the other order must exist (`fst_order_not_found`), must not be the order itself, must not itself be `with_order` (no chains) or `local` (no box), and an order that carries others cannot be carried (`fst_invalid_ship_mode`). Adding tracking to a marked order removes the mark (and a pickup's materials) with a note. AJAX success data / REST 200 body: `message`, `order_id` and the `describe()` keys; AJAX errors are a string message.
 
 ### Fulfillment Order Fan-Out
 When tracking is added to a Fulfillment order (a combined-box meta order with status `wc-fulfillment` owned by the Phase 2.5 fulfillment workflow), ShipTracker fans the tracking number out to every source order listed in the `_fishotel_fulfillment_sources` meta. This creates one `wp_fst_shipments` row per source order, all sharing the same tracking number — which is how customers on the source orders actually receive shipment emails (the fulfillment order itself is `customer = Guest`).
@@ -186,7 +239,7 @@ Kill switches (both default to ON):
 - Set the `fst_fulfillment_fanout_enabled` option to `'0'` for the same effect via the database.
 
 ### Monitoring Shipments
-- **Dashboard Widget** (wp-admin home) - Shows active shipment counts, exceptions, late alerts, and recently delivered orders at a glance
+- **Dashboard Widget** (wp-admin home) - Shows active shipment counts, exceptions, late alerts, and recently delivered orders at a glance, and — when a counted supply is at or under its reorder level — a "Time to reorder" notice with how many are on hand
 - **ShipTracker > Shipments** - Full list with clickable status cards to filter by In Transit, Out for Delivery, Exception, etc. Default sort is by Ship Date (newest first)
 - **ShipTracker > Analytics** - KPIs and charts filtered by date range
 
@@ -229,15 +282,18 @@ Shipments with "Unknown" or "Label Created" status are excluded from all analyti
 - **Carrier Volume** - Shipments per carrier with percentages
 - **Avg. Delivery Time by Carrier** - Comparison of carrier speed
 
-### Label Costs
-For the boxes shipped in the selected range (ship date, the last day included, same Unknown / Label Created exclusion), built by `FST_Label_Cost::get_report()` → `build_report()`:
-- **Cards** - boxes shipped, with / without a recorded cost, total label cost, shipping customers paid, the difference (paid − cost), average cost per box. The four amounts are `null` in `summary` (shown as a dash, never $0.00) when no box in the range has a recorded cost.
+### Box Costs (label + materials)
+For the boxes shipped in the selected range (ship date, the last day included, same Unknown / Label Created exclusion), built by `FST_Label_Cost::get_report()` → `build_report()`. Since 1.9.18 every "cost" is the label plus the box's materials:
+- **Cards** - boxes shipped, with / without a recorded cost, total cost, shipping customers paid, the difference (paid − cost), average cost per box. The four amounts are `null` in `summary` (shown as a dash, never $0.00) when no box in the range has a recorded cost.
+- **What the Cost Is Made Of** - `split`: label, boxes, foam, paper, bags, packs (heat + ice), other, total — for all boxes, and per box size (`split_by_size[dims]`) and per label source (`split_by_source[source]`). The parts always add up to the total. `materials` holds the materials total, `without_label_cost` (materials on boxes that are left out) and `boxes_with_materials`.
 - **By Box Size** - boxes, average cost, average shipping paid, average difference.
 - **By Label Source** - boxes, total and average cost. Sources are grouped without regard to letter case, under the first spelling seen (saved sources already take their saved spelling on input; this covers free text).
 - **Average Cost per Box Size, by Label Source** - side by side, the cheaper source for each size highlighted (named sources only; a tie highlights nobody).
-- **The 20 Boxes That Lost the Most** - linked order numbers, tracking, size, source, cost, shipping paid, difference.
+- **The 20 Boxes That Lost the Most** - linked order numbers, tracking, size, source, label cost, materials, shipping paid, difference.
+- **Free shipping given** (`free_shipping`) - orders that shipped with a label of their own and paid 0.00 shipping: how many, and what they cost (their share of the label + materials of their boxes; a shared box is shared out evenly between its own orders). **Local pickups** (`local_pickups`) - how many in the range (by the day they were marked), and their materials. **Went in another order's box** (`in_other_box`) - how many.
+- **Supplies** (`supplies`, `FST_Supplies::build_supplies_report()`) - per supply in the range: bought (how many, money), used (on the boxes shipped and the local pickups made in the range — with or without a label cost), cost of what was used, on hand now, reorder level / low. For foam and paper (`ballparks`): what was bought beside what the per-box flat amounts added up to, so the ballpark can be corrected.
 
-Rules: boxes without a recorded cost are counted as shipped but left out of every total, average and difference (the page says so, and says how much shipping was paid for them) — `NULL` is never treated as 0. "Shipping paid" is the order's shipping total excluding tax, less any shipping refunded. A box shared by several orders counts the shipping of all of them; an order that went out in several boxes has its shipping split evenly between its boxes (spare cents to the earliest), so it is counted once. Money is summed in whole cents and shown through `wc_price()`.
+Rules: boxes without a recorded LABEL cost are counted as shipped but left out of every total, average and difference, their materials included (the page says so, and says how much shipping was paid for them) — `NULL` is never treated as 0. Their materials are still counted in the Supplies figures. A box with a label cost and no materials recorded costs its label. "Shipping paid" is the order's shipping total excluding tax, less any shipping refunded. A box shared by several orders counts the shipping of all of them; an order that went out in several boxes has its shipping split evenly between its boxes (spare cents to the earliest), so it is counted once. Money is summed in whole cents and shown through `wc_price()`.
 
 ---
 
@@ -258,7 +314,7 @@ Customers receive branded HTML emails when their shipment status changes (based 
 ## Technical Architecture
 
 ### Database Tables
-The plugin creates two custom tables:
+The plugin creates five custom tables:
 
 **`wp_fst_shipments`** - Main shipment records
 - id, order_id, tracking_number, carrier, status, status_detail
@@ -274,6 +330,21 @@ The plugin creates two custom tables:
 **`wp_fst_tracking_events`** - Individual tracking events per shipment
 - id, shipment_id, status, description, location, event_time, raw_data, created_at
 - Indexes on: shipment_id, status, event_time
+
+**`wp_fst_supply_purchases`** (DB version 1.4.0) - The purchase log
+- id, supply_id, purchase_date DATE, qty DECIMAL(12,2), total_paid DECIMAL(10,2), note VARCHAR(190), created_at
+- Indexes on: supply_id, purchase_date
+
+**`wp_fst_supply_usage`** (DB version 1.4.0) - The materials of a box, or of a local pickup
+- id, tracking_number (the box; '' for a local pickup), order_id (0 for a box; the order of a local pickup), kind (`supply` / `foam` / `paper`), supply_id (0 for the two flat amounts), supply_name, role, unit, qty DECIMAL(12,2), unit_cost DECIMAL(12,4), line_cost DECIMAL(10,2), recorded_at
+- Everything but the keys is a snapshot. Read / write through `FST_Supplies::get_box_materials()` / `set_box_materials()` (and `…_order_materials()`); "used" is `SUM(qty) … WHERE supply_id > 0 GROUP BY supply_id`
+- Indexes on: tracking_number, order_id, supply_id
+
+**`wp_fst_supply_counts`** (DB version 1.4.0) - Recounts
+- id, supply_id, counted DECIMAL(12,2) (the real number), delta DECIMAL(12,2) (the correction it made), counted_at, user_id
+- Index on: supply_id
+
+Upgrades only add (`dbDelta`): from 1.2.0 the four cost columns and the three supplies tables, from 1.3.0 the three tables. No existing row changes. The supplies list itself is an option (`fst_supplies`), like the standard boxes.
 
 ### File Structure
 ```
@@ -297,6 +368,8 @@ fishotel-shiptracker/
 │   ├── class-fst-settings.php       # Settings page with all tabs
 │   ├── class-fst-shipment.php       # Shipment data model (CRUD, queries, analytics, box cost helpers)
 │   ├── class-fst-label-cost.php     # Label costs: field normalisation, one-box-one-cost, CSV import, report maths (no DB)
+│   ├── class-fst-supplies.php       # Supplies list, purchases, stock / recounts, materials of a box (defaults, snapshots), suggestions, supplies report
+│   ├── class-fst-ship-mode.php      # Local pickup / went in another order's box: rules + order meta
 │   ├── class-fst-tracker.php        # Polling engine (cron-driven) + EasyPost poll/promote/backfill
 │   ├── class-fst-easypost.php       # EasyPost aggregator (trackers, webhook, signature, backfill)
 │   ├── class-fst-updater.php        # GitHub release auto-updater
@@ -307,12 +380,16 @@ fishotel-shiptracker/
 ├── assets/
 │   └── css/frontend.css             # Customer-facing styles
 └── tests/                           # Plain PHP, no WordPress: for t in tests/*-test.php; do php "$t" || break; done
-    ├── bootstrap.php                # Stubs, in-memory $wpdb and WC_Order double for the label-cost tests
+    ├── bootstrap.php                # Stubs, in-memory $wpdb and WC_Order double for the tests
     ├── add-tracking-args-test.php   # FST_Order::normalize_add_tracking_args()
     ├── label-cost-args-test.php     # Money / weight / box-size spellings, standard box names, absent vs empty
     ├── label-cost-box-test.php      # One box, one cost: fan-out rows, removing the holding row
     ├── label-cost-import-test.php   # CSV reading, header detection, row validation, the import itself
-    └── label-cost-report-test.php   # Report maths: shared boxes, multi-box orders, NULL never 0
+    ├── label-cost-report-test.php   # Report maths: shared boxes, multi-box orders, NULL never 0
+    ├── supplies-stock-test.php      # Price each from the latest purchase, on hand across purchases / usage / recount / a removed box, reorder notice
+    ├── supplies-defaults-test.php   # Supplies list, defaults per box (standard, custom, fish count, weather), snapshots, suggestions, validation
+    ├── supplies-report-test.php     # Label + materials split adding up, free shipping, local pickups, supplies report
+    └── ship-mode-test.php           # Ship mode rules, the service (order meta only), shared-cost maths for "went in another box"
 ```
 
 ### REST API Endpoints
@@ -323,7 +400,8 @@ fishotel-shiptracker/
 | `/fst/v1/order/{id}/shipments` | GET | Admin | Effective shipments (`get_effective_shipments()`) + line-item coverage for an order |
 | `/fst/v1/shipment/{id}` | GET | Admin | Get shipment details + events (the four cost fields are the box's, plus `shared_box`) |
 | `/fst/v1/shipment/{id}/cost` | POST | Admin | Record / change what the box of that shipment cost via `FST_Order::set_label_cost()` |
-| `/fst/v1/shipping-options` | GET | Admin | `standard_boxes[]` (`name`, `length`, `width`, `height`, `dims`) and `label_sources[]` from Settings → Boxes & label costs |
+| `/fst/v1/shipping-options` | GET | Admin | `standard_boxes[]` (`name`, `length`, `width`, `height`, `dims`, and the box defaults `foam_cost`, `paper_cost`, `paper_feet`, `ice_packs`, `supply_id`), `label_sources[]`, `supplies[]` (`id`, `name`, `unit`, `counted`, `reorder_level`, `role`, `box_name`, `price_each`, `on_hand`, `recount_needed`, `low`), `foam_waste_percent`, `ship_modes[]` |
+| `/fst/v1/order/{id}/ship-mode` | POST | Admin | Mark an order with no label of its own via `FST_Order::set_ship_mode()`: `mode` (`label` / `local` / `with_order`), `with_order_id`, optional `date`, `materials` (local) |
 | `/fst/v1/shipment/{id}/recheck` | POST | Admin | Force tracking update |
 | `/fst/v1/track` | POST | Public | Customer lookup by order # + email |
 | `/fst/v1/analytics` | GET | Admin | Status counts and late shipments |
@@ -331,7 +409,7 @@ fishotel-shiptracker/
 
 "Admin" = `permission_callback` is `admin_check()` → `current_user_can( 'manage_woocommerce' )`. It works with cookie + `X-WP-Nonce` (admin.js) **and** with WordPress Application Passwords sent as HTTP Basic auth over HTTPS: the plugin hooks neither `determine_current_user` nor `rest_authentication_errors`, and WooCommerce's key/secret auth only covers `wc/*`. If Basic auth yields `rest_not_logged_in`, the host is stripping the `Authorization` header — see README.md for the `.htaccess` fix.
 
-**`POST /shipment` params:** `order_id` (int, required — the order number in admin is the ID), `tracking_number` (required), `carrier` (`auto`|`ups`|`usps`, default `auto`, schema-enforced), `line_item_ids` (int array or comma-separated; required for regular orders; for a fulfillment order pass the *source* orders' item ids from `source_orders[].line_items[]` — never the fulfillment's own ids — and omit only when the box holds every item of every source), `ship_date` (optional `Y-m-d`, stored as midnight), and the optional box cost fields `label_cost`, `box_weight`, `box_dims`, `label_source` (see "Recording What a Box Cost to Ship"; not schema-typed — the service validates them). Returns **201** with the service result (`message`, `shipment_id`, `shipment_ids`, `skipped_order_ids`, `failed_order_ids`, `carrier`, `shipments[]` post-poll summaries, `order_statuses{}`), or `{"error","code"}` mapped from the service `WP_Error`: 400 `fst_missing_args` / `fst_no_items` / `fst_nothing_added` / `fst_invalid_ship_date` / `fst_invalid_label_cost` / `fst_invalid_box_weight` / `fst_invalid_box_dims`, 404 `fst_order_not_found`, 409 `fst_duplicate_tracking`, 500 `fst_create_failed`. The messages are the ones the admin meta box shows.
+**`POST /shipment` params:** `order_id` (int, required — the order number in admin is the ID), `tracking_number` (required), `carrier` (`auto`|`ups`|`usps`, default `auto`, schema-enforced), `line_item_ids` (int array or comma-separated; required for regular orders; for a fulfillment order pass the *source* orders' item ids from `source_orders[].line_items[]` — never the fulfillment's own ids — and omit only when the box holds every item of every source), `ship_date` (optional `Y-m-d`, stored as midnight), the optional box cost fields `label_cost`, `box_weight`, `box_dims`, `label_source` (see "Recording What a Box Cost to Ship"; not schema-typed — the service validates them) and the optional `materials` (see "Recording What Went Into a Box"; the REST handler uses `has_param()`, so a JSON `null` means "record none" while a missing key means "the standard box's defaults"; also 400 `fst_invalid_materials` / `fst_unknown_supply`). Returns **201** with the service result (`message`, `shipment_id`, `shipment_ids`, `skipped_order_ids`, `failed_order_ids`, `carrier`, `shipments[]` post-poll summaries, `order_statuses{}`), or `{"error","code"}` mapped from the service `WP_Error`: 400 `fst_missing_args` / `fst_no_items` / `fst_nothing_added` / `fst_invalid_ship_date` / `fst_invalid_label_cost` / `fst_invalid_box_weight` / `fst_invalid_box_dims`, 404 `fst_order_not_found`, 409 `fst_duplicate_tracking`, 500 `fst_create_failed`. The messages are the ones the admin meta box shows.
 
 ```bash
 curl -s -X POST 'https://fishotel.com/wp-json/fst/v1/shipment' \
@@ -354,9 +432,11 @@ curl -s -X POST 'https://fishotel.com/wp-json/fst/v1/shipment/912/cost' \
   -d '{"label_cost":"19.25","label_source":"Partner B"}'
 ```
 
-**`POST /shipment/{id}/cost`** takes any of `label_cost`, `box_weight`, `box_dims`, `label_source` and writes to the box (tracking number) of shipment `{id}`. Returns **200** with `message`, `shipment_id`, `tracking_number`, the four fields, `shared_box`, `order_ids[]`; errors as `{"error","code"}`: 404 `fst_shipment_not_found`, 400 `fst_no_cost_fields` / `fst_invalid_label_cost` / `fst_invalid_box_weight` / `fst_invalid_box_dims`. A 409 on `POST /shipment` writes no cost — use this endpoint to add it.
+**`POST /shipment/{id}/cost`** takes any of `label_cost`, `box_weight`, `box_dims`, `label_source`, `materials` and writes to the box (tracking number) of shipment `{id}`. Returns **200** with `message`, `shipment_id`, `tracking_number`, the four fields, `shared_box`, `order_ids[]`, `materials`, `materials_total`, `total_cost`; errors as `{"error","code"}`: 404 `fst_shipment_not_found`, 400 `fst_no_cost_fields` / `fst_invalid_label_cost` / `fst_invalid_box_weight` / `fst_invalid_box_dims` / `fst_invalid_materials` / `fst_unknown_supply`. A 409 on `POST /shipment` writes no cost — use this endpoint to add it.
 
-**`GET /order/{id}/shipments`** returns `order` (`id`, `number`, `status`, `is_fulfillment`, `source_order_ids` = where a POST fans out to), `line_items[]` (`id`, `name`, `quantity`, `covered`), `fully_shipped` (null for fulfillments — coverage lives on the sources), `shipments[]` (row columns minus `tracking_data`, with `line_item_ids` decoded, `status_label`, `tracking_url`, and the box's `label_cost`, `box_weight`, `box_dims`, `label_source` + `shared_box`) and `source_orders[]` (fulfillments only, one per `source_order_ids` entry: `id`, `number`, `status`, `line_items[]` with `covered`, `fully_shipped`, `shipments[]` — all from that source's own rows; these are the ids a POST needs).
+**`POST /order/{id}/ship-mode`** returns **200** with `message`, `order_id`, `mode`, `with_order_id`, `date`, `with_order_number`, `materials`, `materials_total`; errors as `{"error","code"}`: 404 `fst_order_not_found`, 409 `fst_order_has_shipments`, 400 `fst_invalid_ship_mode` / `fst_invalid_materials` / `fst_unknown_supply`.
+
+**`GET /order/{id}/shipments`** returns `order` (`id`, `number`, `status`, `is_fulfillment`, `source_order_ids` = where a POST fans out to), `line_items[]` (`id`, `name`, `quantity`, `covered`), `fully_shipped` (null for fulfillments — coverage lives on the sources), `shipments[]` (row columns minus `tracking_data`, with `line_item_ids` decoded, `status_label`, `tracking_url`, and the box's `label_cost`, `box_weight`, `box_dims`, `label_source` + `shared_box`, `materials`, `materials_total`, `total_cost`) and `source_orders[]` (fulfillments only, one per `source_order_ids` entry: `id`, `number`, `status`, `line_items[]` with `covered`, `fully_shipped`, `shipments[]` — all from that source's own rows; these are the ids a POST needs). Since 1.9.18 also, for the order: `ship_mode` (`FST_Ship_Mode::describe()`), `weather_action` (the action seen, '' when none), `fish_count` (the quantities of the items not in a box yet; all of them when none or all are; a fulfillment counts its sources' items) and `default_materials` (`boxes[]`: `name`, `dims`, `materials` for every standard box; `custom`: the materials of a custom box) so a script or the theme can prefill.
 
 #### For the label skill: POST the tracking here instead of driving the admin screen
 
@@ -405,7 +485,13 @@ The plugin checks GitHub for new releases every 6 hours (cached). To release a n
 - Analytics exclude "Unknown" and "Label Created" statuses
 - All date filtering uses **ship_date**, not the date records were created
 - Use the date range selector to narrow down the timeframe
-- Label Costs leave out every box without a recorded cost — the "Without a Cost" card says how many. Add the costs on the orders or import them under Settings > Boxes & label costs
+- Box Costs leave out every box without a recorded label cost — the "Without a Cost" card says how many. Add the costs on the orders or import them under Settings > Boxes & label costs
+- A supply's "Used" on the Analytics page counts the boxes SHIPPED in the range (a box still "Unknown" / "Label Created" is not in it yet); "On hand" under Settings counts every recorded box at once
+
+### A supply's count looks wrong
+- On hand = bought − used on boxes ± recounts. Check the purchase log (a case logged twice, or with the wrong "how many") and recount: Settings > Boxes & label costs > Purchases & stock
+- "Recount needed" means more was used than the books say was ever bought — log the missing purchase, or recount
+- A box only takes supplies off the shelf when its materials are recorded: a custom-size box, or tracking added without a box size, records none by itself
 
 ### Plugin update requires two clicks
 - Fixed in v1.5.2. If on an older version, the second click completes the update normally.
