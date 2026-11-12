@@ -822,7 +822,7 @@ class FST_Settings {
             <?php endif; ?>
 
             <p class="description">
-                <?php esc_html_e( 'Record what labels cost from a spreadsheet export. The file needs a header row with a tracking column (tracking, tracking number, tracking #) and a cost column (cost, amount, total, charge, price). Weight, dimensions / box and source columns are used when present. Only tracking numbers that already exist in ShipTracker are updated, and only these four fields are ever changed.', 'fishotel-shiptracker' ); ?>
+                <?php esc_html_e( 'Record what labels cost from a spreadsheet export. The file needs a header row with a tracking column (tracking, tracking number, tracking #) and a cost column (cost, amount, total, charge, price). If more than one column could be the cost, nothing is imported and the columns are named: remove the ones that are not what the label cost. Weight, dimensions / box and source columns are used when present. Only tracking numbers that already exist in ShipTracker are updated, and only these four fields are ever changed.', 'fishotel-shiptracker' ); ?>
             </p>
 
             <form method="post" enctype="multipart/form-data" autocomplete="off">

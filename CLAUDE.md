@@ -119,10 +119,12 @@ Two editable lists, both empty until the owner fills them in (nothing is seeded)
 
 Below the lists, **Import label costs** (its own form: `manage_woocommerce` + nonce `fst_import_label_costs`): upload a CSV (2 MB limit, checked before the file is read) or paste the rows.
 - The header row is required; columns are found by their header text: tracking / tracking number / tracking #, and cost / amount / total / charge / price. Optional: weight (pounds — a column headed oz / kg is ignored), dimensions / box (or separate Length, Width, Height columns), source.
+- The cost column is never guessed: `detect_csv_columns()` returns every header that fits in `cost_candidates` and sets `cost` only when there is exactly one. With more (`Customer Paid Amount` + `Label Amount`) `read_import()` stops with an error naming them and nothing is written. Headers containing order / insur / tax / fee / surcharge / base … are not candidates, so `Base Charge, Fuel Surcharge, Total Charge` still reads `Total Charge`.
 - **These labels were bought through** applies to the whole file when it has no source column.
 - Only tracking numbers that already exist are touched, and only the four cost fields (not even `updated_at`). Without **Overwrite**, a box that already has a cost keeps it and only its empty fields are filled.
 - The report lists: matched, already had a cost, not found, invalid (with row numbers and reasons). A tracking number a spreadsheet turned into scientific notation (`9.40011E+21`) is reported as invalid, never guessed; a tracking number listed twice with different costs is invalid on both rows.
 - Handles a UTF-8 / UTF-16 BOM, CRLF, quoted fields and tab- or semicolon-separated text.
+- `FST_Label_Cost::import()` lifts PHP's time limit (`set_time_limit( 0 )`) before it writes: every row has its own queries, and a full 2 MB file must not stop part-way without a report.
 
 ### Migration
 Import tracking data from Advanced Shipment Tracking (AST) or TrackShip plugins:
@@ -149,8 +151,8 @@ The price of a label is known when it is bought, so it is recorded with the trac
 
 | Field | Stored as | Accepted |
 |-------|-----------|----------|
-| `label_cost` | `DECIMAL(10,2)`, e.g. `18.40` | 0 or more; `$` and thousands separators tolerated (`$1,018.4`); rounded to cents. Negative / non-numeric → `fst_invalid_label_cost` |
-| `box_weight` | `DECIMAL(6,2)` pounds | above 0; a trailing `lb` / `lbs` tolerated → else `fst_invalid_box_weight` |
+| `label_cost` | `DECIMAL(10,2)`, e.g. `18.40` | 0 or more; `$` and thousands separators tolerated (`$1,018.4`); rounded to cents. Negative / non-numeric / a currency sign with no amount (`$`) → `fst_invalid_label_cost` |
+| `box_weight` | `DECIMAL(6,2)` pounds | above 0; a trailing `lb` / `lbs` tolerated → else (a unit with no number included) `fst_invalid_box_weight` |
 | `box_dims` | `LxWxH` inches, e.g. `10x10x10` | `10x10x10`, `10 x 10 x 10`, `10*10*10`, `10X10X10 in`, a list of three numbers, or the **name** of a standard box (stored as its size) → else `fst_invalid_box_dims` |
 | `label_source` | up to 40 characters | free text; a value matching a saved label source takes the saved spelling |
 
@@ -229,9 +231,9 @@ Shipments with "Unknown" or "Label Created" status are excluded from all analyti
 
 ### Label Costs
 For the boxes shipped in the selected range (ship date, the last day included, same Unknown / Label Created exclusion), built by `FST_Label_Cost::get_report()` → `build_report()`:
-- **Cards** - boxes shipped, with / without a recorded cost, total label cost, shipping customers paid, the difference (paid − cost), average cost per box.
+- **Cards** - boxes shipped, with / without a recorded cost, total label cost, shipping customers paid, the difference (paid − cost), average cost per box. The four amounts are `null` in `summary` (shown as a dash, never $0.00) when no box in the range has a recorded cost.
 - **By Box Size** - boxes, average cost, average shipping paid, average difference.
-- **By Label Source** - boxes, total and average cost.
+- **By Label Source** - boxes, total and average cost. Sources are grouped without regard to letter case, under the first spelling seen (saved sources already take their saved spelling on input; this covers free text).
 - **Average Cost per Box Size, by Label Source** - side by side, the cheaper source for each size highlighted (named sources only; a tie highlights nobody).
 - **The 20 Boxes That Lost the Most** - linked order numbers, tracking, size, source, cost, shipping paid, difference.
 

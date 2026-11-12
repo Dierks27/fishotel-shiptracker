@@ -65,7 +65,7 @@ They are stored on `wp_fst_shipments` (database version 1.3.0, added automatical
 On the same tab, **Import label costs** records costs in bulk from a spreadsheet export:
 
 1. Upload a CSV (up to 2 MB) or paste the rows, header row included — cells copied straight from a spreadsheet work too.
-2. The columns are found by their header text: a tracking column (`tracking`, `tracking number`, `tracking #`) and a cost column (`cost`, `amount`, `total`, `charge`, `price`) are required; `weight` (pounds), `dimensions` / `box` and `source` are used when present.
+2. The columns are found by their header text: a tracking column (`tracking`, `tracking number`, `tracking #`) and a cost column (`cost`, `amount`, `total`, `charge`, `price`) are required; `weight` (pounds), `dimensions` / `box` and `source` are used when present. The file must have exactly one column that could be the cost: with two (say `Customer Paid Amount` and `Label Amount`) nothing is imported and the message names them — remove the one that is not what the label cost and import again. Order, insurance, tax, fee, surcharge and base columns are not taken for the cost.
 3. If the file has no source column, pick **These labels were bought through** for the whole file.
 4. Leave **Overwrite** unticked to keep costs that are already recorded (only their empty fields are filled); tick it to replace them.
 
@@ -81,9 +81,9 @@ Tracking #,Total Charge,Weight,Box
 
 **ShipTracker > Analytics > Label Costs** shows, for the boxes shipped in the selected date range:
 
-- boxes shipped, how many have / do not have a recorded cost, total label cost, the shipping customers paid, the difference and the average cost per box;
+- boxes shipped, how many have / do not have a recorded cost, total label cost, the shipping customers paid, the difference and the average cost per box (the four amounts show a dash, not $0.00, while no box in the range has a recorded cost);
 - **By Box Size** — boxes, average cost, average shipping paid, average difference;
-- **By Label Source** — boxes, total and average cost — and the average cost per box size for each source side by side, with the cheaper source highlighted;
+- **By Label Source** — boxes, total and average cost — and the average cost per box size for each source side by side, with the cheaper source highlighted. A source typed by hand counts as one whatever its letter case (`Partner C` and `partner c` are one row);
 - **The 20 Boxes That Lost the Most** — order numbers (linked), tracking number, size, source, cost, shipping paid, difference.
 
 Boxes without a recorded label cost are left out of every total, average and difference; the page says how many there are. "Shipping paid" is the order's shipping total before tax, less any shipping refunded. A box shared by several orders counts the shipping of all of them, and an order that went out in several boxes has its shipping split evenly between them, so it is counted once.
@@ -150,7 +150,7 @@ RewriteRule ^(.*) - [E=HTTP_AUTHORIZATION:%1]
 | `carrier` | `auto` \| `ups` \| `usps` | no | Default `auto` (detects UPS `1Z…` / USPS 20–22 digits; otherwise the configured default carrier) |
 | `line_item_ids` | int[] | regular orders: yes | `WC_Order_Item` IDs in this box. Regular order: the ids from `line_items[]` of `GET /order/{id}/shipments`. **Fulfillment order: the *source* orders' item ids** from `source_orders[].line_items[]` — never the fulfillment's own ids (they match no source, so every source is skipped and you get `fst_nothing_added`). Omit only when the box holds every item of every source: the fan-out then stores a covers-all row on each source and flips each one to Shipped. A comma-separated string is also accepted. |
 | `ship_date` | `Y-m-d` | no | Defaults to now |
-| `label_cost` | number or string | no | What the label cost: 0 or more. `$` and thousands separators are tolerated (`"$1,018.4"`), more than two decimals are rounded to cents |
+| `label_cost` | number or string | no | What the label cost: 0 or more. `$` and thousands separators are tolerated (`"$1,018.4"`), more than two decimals are rounded to cents. A currency sign with no amount (`"$"`) is invalid, not empty |
 | `box_weight` | number or string | no | Pounds, above 0 (`11`, `"11 lbs"`) |
 | `box_dims` | string | no | Box size in inches as `LxWxH` — `10x10x10`, `10 x 10 x 10`, `10*10*10` and `10X10X10 in` are all stored as `10x10x10` — or the **name** of a standard box from `GET /shipping-options` (stored as its size) |
 | `label_source` | string | no | Where the label was bought: a name from `GET /shipping-options`, or free text (40 characters) |
@@ -204,7 +204,7 @@ Errors come back as `{"error": "<message>", "code": "<code>"}` with the message 
 | 400 | `fst_no_items` | Regular order and no `line_item_ids` |
 | 400 | `fst_nothing_added` | None of the `line_item_ids` belong to the target order(s) |
 | 400 | `fst_invalid_ship_date` | `ship_date` not a valid `Y-m-d` |
-| 400 | `fst_invalid_label_cost` | `label_cost` negative or not a number |
+| 400 | `fst_invalid_label_cost` | `label_cost` negative, not a number, or a currency sign with no amount |
 | 400 | `fst_invalid_box_weight` | `box_weight` not a number above 0 |
 | 400 | `fst_invalid_box_dims` | `box_dims` neither three sizes above 0 nor a standard box name |
 | 400 | `rest_invalid_param` | WordPress schema check, e.g. `carrier` not one of `auto`, `ups`, `usps`. Raised by WordPress before the plugin runs, so it uses WordPress's envelope `{"code","message","data":{"status","params","details"}}` — read `message` and `data.params`, there is no `error` key |

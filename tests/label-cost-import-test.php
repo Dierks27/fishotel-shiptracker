@@ -106,10 +106,33 @@ fst_assert_same( null, $columns['cost'], 'the customer\'s order total is not tak
 
 $columns = FST_Label_Cost::detect_csv_columns( array( 'Date', 'Tracking #', 'Weight (lb)', 'Dimensions', 'Source', 'Total' ) );
 fst_assert_same(
-    array( 'tracking' => 1, 'cost' => 5, 'weight' => 2, 'dims' => 3, 'source' => 4 ),
+    array( 'tracking' => 1, 'cost' => 5, 'weight' => 2, 'dims' => 3, 'source' => 4, 'cost_candidates' => array( 5 ) ),
     $columns,
     'optional weight, dimensions and source columns are found'
 );
+
+// More than one header that could be the cost: none is taken.
+$ambiguous_headers = array(
+    array( 'Order #', 'Tracking', 'Customer Paid Amount', 'Label Amount' ),
+    array( 'Order #', 'Tracking', 'Shipping Charged To Customer', 'Label Charge' ),
+    array( 'Order #', 'Tracking', 'Amount Paid', 'Label Amount' ),
+    array( 'Order #', 'Tracking', 'Cost', 'Total' ),
+    array( 'Order #', 'Tracking', 'Cost', 'Cost' ),
+);
+foreach ( $ambiguous_headers as $header ) {
+    $columns = FST_Label_Cost::detect_csv_columns( $header );
+    fst_assert_same(
+        array( null, array( 2, 3 ) ),
+        array( $columns['cost'], $columns['cost_candidates'] ),
+        '"' . $header[2] . '" and "' . $header[3] . '" both fit: no cost column is picked'
+    );
+}
+
+$columns = FST_Label_Cost::detect_csv_columns( array( 'Tracking Number', 'Order Total', 'Insurance Cost', 'Fuel Surcharge', 'Base Charge', 'Total Charge' ) );
+fst_assert_same( array( 5 ), $columns['cost_candidates'], 'order, insurance, surcharge and base columns are not candidates' );
+
+$columns = FST_Label_Cost::detect_csv_columns( array( 'Tracking Total', 'Cost' ) );
+fst_assert_same( array( 0, 1, array( 1 ) ), array( $columns['tracking'], $columns['cost'], $columns['cost_candidates'] ), 'the tracking column is not a cost candidate' );
 
 $columns = FST_Label_Cost::detect_csv_columns( array( 'Tracking #', 'Cost', 'Box' ) );
 fst_assert_same( 2, $columns['dims'], 'a "Box" column is the box size' );
@@ -210,6 +233,25 @@ $read = FST_Label_Cost::read_import( "Tracking,Cost\n1Z1,5\n1z1,5.00\n1Z2,6\n1Z2
 fst_assert_same( 1, $read['repeated'], 'a row repeating the same tracking number and cost is skipped' );
 fst_assert_same( array( '1Z1', '1Z3' ), array( $read['entries'][0]['tracking_number'], $read['entries'][1]['tracking_number'] ), 'the first of the repeats is kept' );
 fst_assert_same( array( 4, 5 ), array( $read['invalid'][0]['row'], $read['invalid'][1]['row'] ), 'a tracking number listed with two different costs is invalid on both rows' );
+
+// Two cost-like columns: 45.00 is what the customer paid, 53.73 the label.
+$read = FST_Label_Cost::read_import( "Order #,Tracking,Customer Paid Amount,Label Amount\n34183,1Z1,45.00,53.73\n" );
+fst_assert_same(
+    array( true, true ),
+    array( false !== strpos( $read['error'], '"Customer Paid Amount", "Label Amount"' ), false !== strpos( $read['error'], 'Nothing was imported' ) ),
+    'two columns that could be the cost: the error names both'
+);
+fst_assert_same( array( array(), 0 ), array( $read['entries'], $read['rows'] ), 'and no row is read, so neither amount can be saved' );
+
+$read = FST_Label_Cost::read_import( "Order #,Tracking,Label Amount\n34183,1Z1,53.73\n" );
+fst_assert_same( array( '', '53.73' ), array( $read['error'], $read['entries'][0]['fields']['label_cost'] ), 'with the other column removed the same file imports' );
+
+$read = FST_Label_Cost::read_import( "Tracking,Cost\n1Z1,\$\n1Z2,USD\n1Z3,\$ 5\n" );
+fst_assert_same(
+    array( array( 2, 3 ), array( '1Z3' ) ),
+    array( array( $read['invalid'][0]['row'], $read['invalid'][1]['row'] ), array( $read['entries'][0]['tracking_number'] ) ),
+    'a cost cell holding only a currency sign is invalid'
+);
 
 $read = FST_Label_Cost::read_import( "Name,City\nA,B\n" );
 fst_assert_same( true, '' !== $read['error'], 'no tracking / cost column: an error, nothing read' );
@@ -337,5 +379,18 @@ fst_assert_same( $before, fst_test_rows_without_cost_fields(), 'still nothing el
 $result = FST_Label_Cost::import( "Name,City\nA,B\n", '', true );
 fst_assert_same( true, '' !== $result['error'], 'a file without the columns reports an error' );
 fst_assert_same( array( 0, 0 ), array( $result['matched'], $result['rows'] ), 'and changes nothing' );
+
+// The wrong-column case end to end: the customer's 45.00 must not replace
+// (or become) the label cost of a box, even with overwrite ticked.
+$stored = $wpdb->tables[ $table ];
+$result = FST_Label_Cost::import( "Order #,Tracking,Customer Paid Amount,Label Amount\n203,1Z50W72W0115498881,45.00,53.73\n204,1Z50W72W0115498889,45.00,53.73\n", '', true );
+fst_assert_same( true, false !== strpos( $result['error'], 'More than one column could be the label cost' ), 'a file with two cost-like columns is refused' );
+fst_assert_same( array( 0, 0 ), array( $result['matched'], $result['had_cost'] ), 'nothing is matched' );
+fst_assert_same( $stored, $wpdb->tables[ $table ], 'and no row is written' );
+
+// A large file must not be cut off by PHP's time limit part-way through.
+ini_set( 'max_execution_time', '30' );
+$result = FST_Label_Cost::import( "Tracking,Cost\n1Z50W72W0115498889,7.00\n" );
+fst_assert_same( array( 1, '0' ), array( $result['matched'], (string) ini_get( 'max_execution_time' ) ), 'the import lifts PHP\'s time limit before it writes' );
 
 fst_test_finish();

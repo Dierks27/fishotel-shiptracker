@@ -179,6 +179,8 @@ fst_assert_same(
 
 fst_assert_error( $service->set_label_cost( $first_id, array() ), 'fst_no_cost_fields', 'no field sent is an error, nothing changes' );
 fst_assert_error( $service->set_label_cost( $first_id, array( 'label_cost' => '-1' ) ), 'fst_invalid_label_cost', 'an invalid value is refused' );
+fst_assert_error( $service->set_label_cost( $first_id, array( 'label_cost' => '$' ) ), 'fst_invalid_label_cost', 'a currency sign with no amount is refused' );
+fst_assert_error( $service->set_label_cost( $first_id, array( 'label_cost' => 'USD' ) ), 'fst_invalid_label_cost', 'so is "USD" alone' );
 fst_assert_error( $service->set_label_cost( 987654, array( 'label_cost' => '1' ) ), 'fst_shipment_not_found', 'unknown shipment id' );
 fst_assert_same( '44.00', FST_Shipment::get_box_cost( $shared )['label_cost'], 'the refused updates changed nothing' );
 

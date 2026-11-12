@@ -95,14 +95,20 @@ class FST_Label_Cost {
      *
      * @param mixed $raw
      * @return string|null|WP_Error "18.40", null when empty, WP_Error
-     *                              `fst_invalid_label_cost` when negative or
-     *                              not a number.
+     *                              `fst_invalid_label_cost` when negative,
+     *                              not a number or a currency sign on its own.
      */
     public static function parse_money( $raw ) {
         if ( is_string( $raw ) ) {
-            $raw = trim( $raw );
-            $raw = preg_replace( '/^(?:usd|us\$|\$)\s*/i', '', $raw );
-            $raw = preg_replace( '/\s*(?:usd|\$)$/i', '', $raw );
+            $typed = trim( $raw );
+            $raw   = preg_replace( '/^(?:usd|us\$|\$)\s*/i', '', $typed );
+            $raw   = preg_replace( '/\s*(?:usd|\$)$/i', '', $raw );
+
+            // "$" with no amount is a slip, not "empty": on an update it
+            // would clear a recorded cost.
+            if ( '' !== $typed && '' === trim( $raw ) ) {
+                $raw = false;
+            }
         }
 
         $hundredths = self::parse_hundredths( $raw, 8 );
@@ -119,11 +125,18 @@ class FST_Label_Cost {
      *
      * @param mixed $raw
      * @return string|null|WP_Error "11.00", null when empty, WP_Error
-     *                              `fst_invalid_box_weight` otherwise.
+     *                              `fst_invalid_box_weight` otherwise (a
+     *                              unit on its own included).
      */
     public static function parse_weight( $raw ) {
         if ( is_string( $raw ) ) {
-            $raw = preg_replace( '/\s*(?:lbs?\.?|pounds?|#)$/i', '', trim( $raw ) );
+            $typed = trim( $raw );
+            $raw   = preg_replace( '/\s*(?:lbs?\.?|pounds?|#)$/i', '', $typed );
+
+            // "lb" with no number, like "$" with no amount, is not "empty".
+            if ( '' !== $typed && '' === trim( $raw ) ) {
+                $raw = false;
+            }
         }
 
         $hundredths = self::parse_hundredths( $raw, 4 );
@@ -577,11 +590,13 @@ class FST_Label_Cost {
      *
      * @param array $header Header cells.
      * @return array {
-     *     @type int|null       $tracking tracking / tracking number / tracking #
-     *     @type int|null       $cost     cost / amount / total / charge / price
-     *     @type int|null       $weight   Optional. Skipped when the header names a unit other than pounds.
-     *     @type int|int[]|null $dims     Optional. dimensions / box, or [ length, width, height ] columns.
-     *     @type int|null       $source   Optional.
+     *     @type int|null       $tracking        tracking / tracking number / tracking #
+     *     @type int|null       $cost            cost / amount / total / charge / price. Null when no
+     *                                           header fits — or when more than one does.
+     *     @type int|null       $weight          Optional. Skipped when the header names a unit other than pounds.
+     *     @type int|int[]|null $dims            Optional. dimensions / box, or [ length, width, height ] columns.
+     *     @type int|null       $source          Optional.
+     *     @type int[]          $cost_candidates Every column whose header could be the cost.
      * }
      */
     public static function detect_csv_columns( array $header ) {
@@ -591,11 +606,12 @@ class FST_Label_Cost {
         }
 
         $columns = array(
-            'tracking' => null,
-            'cost'     => null,
-            'weight'   => null,
-            'dims'     => null,
-            'source'   => null,
+            'tracking'        => null,
+            'cost'            => null,
+            'weight'          => null,
+            'dims'            => null,
+            'source'          => null,
+            'cost_candidates' => array(),
         );
         $used    = array();
 
@@ -607,7 +623,11 @@ class FST_Label_Cost {
             array( 'status', 'url', 'link', 'date', 'event', 'detail', 'updated' )
         );
 
-        $columns['cost'] = self::find_column(
+        // The cost is never picked from several headers that fit: with both
+        // "Customer Paid Amount" and "Label Amount" in a file, taking the
+        // first would record what the customer paid as the label cost. Only
+        // a single fitting column is used; read_import() stops otherwise.
+        $columns['cost_candidates'] = self::find_columns(
             $names,
             $used,
             array(
@@ -616,8 +636,12 @@ class FST_Label_Cost {
                 'amount charged', 'amount paid', 'label price', 'total price', 'rate', 'postage', 'net charge', 'billed amount',
             ),
             array( 'cost', 'amount', 'total', 'charge', 'price' ),
-            array( 'order', 'insur', 'declared', 'value', 'tax', 'item', 'product', 'weight', 'qty', 'quantity', 'refund', 'surcharge', 'fee', 'discount' )
+            array( 'order', 'insur', 'declared', 'value', 'tax', 'item', 'product', 'weight', 'qty', 'quantity', 'refund', 'surcharge', 'fee', 'discount', 'base' )
         );
+        if ( 1 === count( $columns['cost_candidates'] ) ) {
+            $columns['cost']          = $columns['cost_candidates'][0];
+            $used[ $columns['cost'] ] = true;
+        }
 
         // A weight column in ounces, grams or kilograms is left alone — the
         // column stores pounds and nothing is converted on a guess.
@@ -700,6 +724,45 @@ class FST_Label_Cost {
         }
 
         return null;
+    }
+
+    /**
+     * Every unused column whose header equals one of $exact, or contains a
+     * $contains word and none of the $exclude words — find_column() without
+     * choosing between them.
+     *
+     * @param array $names    Column index => normalised header.
+     * @param array $used     Column indexes already taken.
+     * @param array $exact
+     * @param array $contains
+     * @param array $exclude
+     * @return int[]
+     */
+    private static function find_columns( array $names, array $used, array $exact, array $contains, array $exclude ) {
+        $found = array();
+
+        foreach ( $names as $index => $name ) {
+            if ( isset( $used[ $index ] ) ) {
+                continue;
+            }
+            if ( in_array( $name, $exact, true ) ) {
+                $found[] = $index;
+                continue;
+            }
+            foreach ( $exclude as $bad ) {
+                if ( false !== strpos( $name, $bad ) ) {
+                    continue 2;
+                }
+            }
+            foreach ( $contains as $word ) {
+                if ( false !== strpos( $name, $word ) ) {
+                    $found[] = $index;
+                    break;
+                }
+            }
+        }
+
+        return $found;
     }
 
     /**
@@ -786,12 +849,27 @@ class FST_Label_Cost {
         }
 
         $columns = self::detect_csv_columns( $header );
-        foreach ( $columns as $field => $index ) {
+        foreach ( array_keys( $read['columns'] ) as $field ) {
+            $index = $columns[ $field ];
             if ( is_array( $index ) ) {
                 $read['columns'][ $field ] = $header[ $index[0] ] . ' / ' . $header[ $index[1] ] . ' / ' . $header[ $index[2] ];
             } elseif ( null !== $index ) {
                 $read['columns'][ $field ] = $header[ $index ];
             }
+        }
+
+        // Several columns that could be the cost: say which and write
+        // nothing — the wrong one would look like a real cost in the reports.
+        if ( count( $columns['cost_candidates'] ) > 1 ) {
+            $candidates = array();
+            foreach ( $columns['cost_candidates'] as $index ) {
+                $candidates[] = '"' . $header[ $index ] . '"';
+            }
+            $read['error'] = sprintf(
+                'More than one column could be the label cost: %s. Nothing was imported, because picking one would be a guess. Remove the columns that are not what the label cost and import the file again.',
+                implode( ', ', $candidates )
+            );
+            return $read;
         }
 
         if ( null === $columns['tracking'] || null === $columns['cost'] ) {
@@ -1012,6 +1090,12 @@ class FST_Label_Cost {
             'invalid_list'     => array_slice( $read['invalid'], 0, self::IMPORT_LIST_LIMIT ),
         );
 
+        // A full 2 MB file is tens of thousands of rows, each with its own
+        // queries. PHP's time limit must not stop it part-way with no report.
+        if ( function_exists( 'set_time_limit' ) ) {
+            set_time_limit( 0 );
+        }
+
         foreach ( $read['entries'] as $entry ) {
             $box = FST_Shipment::get_box_cost( $entry['tracking_number'] );
 
@@ -1110,10 +1194,12 @@ class FST_Label_Cost {
      * @param array    $standard_boxes   FST_Settings::get_standard_boxes(), for size names.
      * @return array {
      *     @type array $summary        boxes, boxes_with_cost, boxes_without_cost, total_cost,
-     *                                 total_paid, difference (paid − cost), avg_cost (null when
-     *                                 no box has a cost), paid_without_cost. Money as decimal strings.
+     *                                 total_paid, difference (paid − cost), avg_cost (those four
+     *                                 null when no box has a cost), paid_without_cost. Money as
+     *                                 decimal strings.
      *     @type array $by_size        [ { dims, label, boxes, avg_cost, avg_paid, avg_diff } ]
-     *     @type array $by_source      [ { source, label, boxes, total_cost, avg_cost } ]
+     *     @type array $by_source      [ { source, label, boxes, total_cost, avg_cost } ] — sources
+     *                                 differing only in letter case are one row.
      *     @type array $size_by_source { sources: [ { source, label } ], rows: [ { dims, label,
      *                                 cells: source => { boxes, avg_cost }, cheapest } ] }
      *     @type array $losers         The 20 boxes with the most negative difference.
@@ -1220,6 +1306,7 @@ class FST_Label_Cost {
         $paid_without_cost = 0;
         $sizes             = array();
         $sources           = array();
+        $source_spellings  = array();
         $matrix            = array();
         $losers            = array();
 
@@ -1235,6 +1322,15 @@ class FST_Label_Cost {
 
             $dims   = null === $box['box_dims'] ? '' : $box['box_dims'];
             $source = null === $box['label_source'] ? '' : $box['label_source'];
+
+            // "Partner A" and "partner a" are one source (a name typed by
+            // hand that is not on the saved list): grouped without regard
+            // to letter case, under the first spelling seen.
+            $source_key = self::lower( $source );
+            if ( ! isset( $source_spellings[ $source_key ] ) ) {
+                $source_spellings[ $source_key ] = $source;
+            }
+            $source = $source_spellings[ $source_key ];
 
             if ( ! isset( $sizes[ $dims ] ) ) {
                 $sizes[ $dims ] = array( 'boxes' => 0, 'cost' => 0, 'paid' => 0 );
@@ -1342,9 +1438,10 @@ class FST_Label_Cost {
                 'boxes'              => count( $boxes ),
                 'boxes_with_cost'    => $with_cost,
                 'boxes_without_cost' => count( $boxes ) - $with_cost,
-                'total_cost'         => self::from_cents( $total_cost ),
-                'total_paid'         => self::from_cents( $total_paid ),
-                'difference'         => self::from_cents( $total_paid - $total_cost ),
+                // No box with a cost: there is no total to show, not a total of 0.00.
+                'total_cost'         => $with_cost > 0 ? self::from_cents( $total_cost ) : null,
+                'total_paid'         => $with_cost > 0 ? self::from_cents( $total_paid ) : null,
+                'difference'         => $with_cost > 0 ? self::from_cents( $total_paid - $total_cost ) : null,
                 'avg_cost'           => $with_cost > 0 ? self::from_cents( self::average( $total_cost, $with_cost ) ) : null,
                 'paid_without_cost'  => self::from_cents( $paid_without_cost ),
             ),

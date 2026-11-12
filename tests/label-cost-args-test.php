@@ -57,6 +57,10 @@ $bad_money = array( '-5', '-0.01', '$-5', '-$5', '(5.00)', 'abc', '12,50', '1,23
 foreach ( $bad_money as $input ) {
     fst_assert_error( FST_Label_Cost::parse_money( $input ), 'fst_invalid_label_cost', 'money "' . $input . '" is rejected' );
 }
+// A currency sign with no amount is a slip, never "empty".
+foreach ( array( '$', ' $ ', '$$', 'USD', 'usd', 'US$', '$ USD' ) as $input ) {
+    fst_assert_error( FST_Label_Cost::parse_money( $input ), 'fst_invalid_label_cost', 'money "' . $input . '" (no amount) is rejected, not read as empty' );
+}
 fst_assert_error( FST_Label_Cost::parse_money( -3 ), 'fst_invalid_label_cost', 'int -3 is rejected' );
 fst_assert_error( FST_Label_Cost::parse_money( -2.5 ), 'fst_invalid_label_cost', 'float -2.5 is rejected' );
 fst_assert_error( FST_Label_Cost::parse_money( INF ), 'fst_invalid_label_cost', 'INF is rejected' );
@@ -86,6 +90,9 @@ fst_assert_same( null, FST_Label_Cost::parse_weight( null ), 'null weight is NUL
 
 foreach ( array( '0', '0.00', '0.001', '-1', 'abc', '176 oz', '5 kg', '10000' ) as $input ) {
     fst_assert_error( FST_Label_Cost::parse_weight( $input ), 'fst_invalid_box_weight', 'weight "' . $input . '" is rejected' );
+}
+foreach ( array( 'lb', ' lbs ', 'pounds', '#' ) as $input ) {
+    fst_assert_error( FST_Label_Cost::parse_weight( $input ), 'fst_invalid_box_weight', 'weight "' . $input . '" (no number) is rejected, not read as empty' );
 }
 fst_assert_error( FST_Label_Cost::parse_weight( 0 ), 'fst_invalid_box_weight', 'int 0 weight is rejected (must be above 0)' );
 
@@ -243,6 +250,8 @@ fst_assert_same(
     'update: 0 is a value, not "empty"'
 );
 fst_assert_error( FST_Label_Cost::normalize_fields( array( 'label_cost' => 'free' ), true ), 'fst_invalid_label_cost', 'update: non-numeric cost' );
+fst_assert_error( FST_Label_Cost::normalize_fields( array( 'label_cost' => '$' ), true ), 'fst_invalid_label_cost', 'update: "$" alone does not clear the cost' );
+fst_assert_error( FST_Label_Cost::normalize_fields( array( 'box_weight' => 'lbs' ), true ), 'fst_invalid_box_weight', 'update: "lbs" alone does not clear the weight' );
 fst_assert_error( FST_Label_Cost::normalize_fields( array( 'box_dims' => 'Medium' ), true ), 'fst_invalid_box_dims', 'update: unknown box name' );
 
 // ---------------------------------------------------------------------------

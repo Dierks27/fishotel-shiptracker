@@ -110,21 +110,50 @@ $report = FST_Label_Cost::build_report(
     fst_test_orders_paid( array( 2 => '12.00' ) )
 );
 fst_assert_same(
-    array( 1, 0, '0.00', '0.00', '0.00', null ),
     array(
-        $report['summary']['boxes'],
+        'boxes'              => 1,
+        'boxes_with_cost'    => 0,
+        'boxes_without_cost' => 1,
+        'total_cost'         => null,
+        'total_paid'         => null,
+        'difference'         => null,
+        'avg_cost'           => null,
+        'paid_without_cost'  => '12.00',
+    ),
+    $report['summary'],
+    'no cost recorded anywhere: cost, paid, difference and average are unknown (null), never 0.00 — the 12.00 paid is only under paid_without_cost'
+);
+fst_assert_same( array( array(), array(), array() ), array( $report['by_size'], $report['by_source'], $report['losers'] ), 'and the tables are empty' );
+
+$report = FST_Label_Cost::build_report(
+    array( 'BOX-C' ),
+    array( fst_test_row( 3, 'BOX-C', '0.00' ) ),
+    fst_test_orders_paid( array( 3 => '0.00' ) )
+);
+fst_assert_same(
+    array( 1, '0.00', '0.00', '0.00', '0.00' ),
+    array(
         $report['summary']['boxes_with_cost'],
         $report['summary']['total_cost'],
         $report['summary']['total_paid'],
         $report['summary']['difference'],
         $report['summary']['avg_cost'],
     ),
-    'no cost recorded anywhere: nothing is compared and the average is unknown (null), not 0'
+    'a recorded 0.00 against 0.00 paid is a real total of 0.00, not unknown'
 );
-fst_assert_same( array( array(), array(), array() ), array( $report['by_size'], $report['by_source'], $report['losers'] ), 'and the tables are empty' );
 
 $report = FST_Label_Cost::build_report( array(), array(), array() );
-fst_assert_same( array( 0, null ), array( $report['summary']['boxes'], $report['summary']['avg_cost'] ), 'an empty range is all zeros' );
+fst_assert_same(
+    array( 0, null, null, null, null ),
+    array(
+        $report['summary']['boxes'],
+        $report['summary']['total_cost'],
+        $report['summary']['total_paid'],
+        $report['summary']['difference'],
+        $report['summary']['avg_cost'],
+    ),
+    'an empty range has no boxes and no totals'
+);
 
 // ---------------------------------------------------------------------------
 // One box shared by several orders.
@@ -289,6 +318,35 @@ fst_assert_same( 'Partner A', $matrix['10x10x10']['cheapest'], 'the cheaper part
 fst_assert_same( null, $matrix['16x16x16']['cheapest'], 'a tie highlights nobody' );
 fst_assert_same( null, $matrix['8x8x8']['cheapest'], 'a size bought through one partner only has nothing to compare' );
 fst_assert_same( null, $matrix['8x8x8']['cells']['Partner A'], 'an empty cell is null, not 0' );
+
+// A source typed by hand in different letter cases is one source.
+$rows = array(
+    fst_test_row( 60, 'C1', '10.00', '10x10x10', 'Partner C' ),
+    fst_test_row( 61, 'C2', '14.00', '10x10x10', 'partner c' ),
+    fst_test_row( 62, 'C3', '30.00', '16x16x16', 'PARTNER C' ),
+    fst_test_row( 63, 'C4', '16.00', '10x10x10', 'Partner A' ),
+);
+$report = FST_Label_Cost::build_report( array( 'C1', 'C2', 'C3', 'C4' ), $rows, array(), $standard_boxes );
+
+fst_assert_same(
+    array(
+        array( 'source' => 'Partner C', 'label' => 'Partner C', 'boxes' => 3, 'total_cost' => '54.00', 'avg_cost' => '18.00' ),
+        array( 'source' => 'Partner A', 'label' => 'Partner A', 'boxes' => 1, 'total_cost' => '16.00', 'avg_cost' => '16.00' ),
+    ),
+    $report['by_source'],
+    '"Partner C", "partner c" and "PARTNER C" are one row, under the first spelling seen'
+);
+fst_assert_same( 2, count( $report['size_by_source']['sources'] ), 'and one column side by side' );
+
+$matrix = array();
+foreach ( $report['size_by_source']['rows'] as $matrix_row ) {
+    $matrix[ $matrix_row['dims'] ] = $matrix_row;
+}
+fst_assert_same( array( 'boxes' => 2, 'avg_cost' => '12.00' ), $matrix['10x10x10']['cells']['Partner C'], 'both spellings land in the same cell' );
+fst_assert_same( 'Partner C', $matrix['10x10x10']['cheapest'], 'so the cheaper partner is compared on all of its boxes' );
+
+$boxes = fst_test_boxes_by_tracking( $report );
+fst_assert_same( 'partner c', $boxes['C2']['label_source'], 'the box itself keeps the spelling that was recorded' );
 
 // ---------------------------------------------------------------------------
 // The boxes that lost the most.
