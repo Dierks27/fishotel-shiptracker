@@ -71,6 +71,7 @@ Below the lists, **Purchases & stock**:
 
 - **Log a purchase** each time you buy more: the supply, the date, how many came in the case (sheets of foam, feet of paper on the roll), what you paid in total, and optionally where you bought it. Purchases can be corrected and removed.
 - **The price of one** = total paid ÷ how many, of the *latest* purchase (by date; two on the same day: the one logged last). New boxes use it. Boxes already recorded keep the price they were recorded at.
+- **Log an opening purchase for every supply before you record the first box** — what is on the shelf now and what you paid for it. A supply with no purchase has no price yet, and a box recorded then counts it at $0.00. Logging the purchase afterwards does not rewrite that box: the line takes the price the next time the box's materials are saved.
 - **Stock** (supplies that are counted down): on hand = bought − used on boxes ± recounts. Removing a box from an order gives its supplies back. When the shelf and the books disagree, **recount**: enter how many are really there, and the difference is stored with the date and who counted. The screen never shows less than nothing — a count that would be below zero shows 0 with "recount needed".
 - **Reorder notice** — supplies at or under their reorder level are listed, with how many are on hand, at the top of the Supplies list and on the ShipTracker dashboard widget. Other plugins can read the same list with `apply_filters( 'fst_low_supplies', array() )`.
 
@@ -87,7 +88,9 @@ When tracking is added with a **standard box** and no materials are sent, the bo
 - one fish bag per fish in the box — the quantities of the line items in this shipment added up;
 - **one heat pack** when the order's weather action is *heat pack*; the box's **ice-pack count** when it is *cooling*.
 
-A custom size starts with nothing (no foam, no paper, no box) — send or enter what was used. Everything can be changed afterwards on the shipment; a quantity of 0 removes the line.
+A custom size starts with nothing (no foam, no paper, no box) — send or enter what was used. Everything can be changed afterwards on the shipment; a quantity of 0 removes the line. A line can carry its own price (`unit_cost`) when one cost something else than usual — a custom box that was paid for, or 0 for one that was free.
+
+When a box is changed later, a line it already has keeps the price, the name and the use it was recorded with, whatever the supply is called or used for by then — so a recorded cost never moves from, say, *bags* to *other* in the report. The one exception is the line recorded at $0.00 before its supply had a price (see above).
 
 The weather action is read from the order when the FisHotel Misc plugin's Weather section has noted it (order meta `_fh_weather_action`: `heat_pack`, `cooling`, `none`, …; a combined box is noted on its wrapper order). ShipTracker does not depend on that plugin: without a note there is simply no pack by default. The filter `fst_order_pack_action` ( `$action`, `$order` ) can supply the action from anywhere else, and `fst_box_fish_count` ( `$count`, `$order`, `$item_ids` ) can adjust the fish count (an order with dry goods on it).
 
@@ -99,6 +102,8 @@ Some orders never get a label of their own. On an order with no shipment, **How 
 - **Went in another order's box** — pick the order. That order's box (or boxes) then counts this order's shipping paid against its cost, exactly like a box shared by a combined shipment.
 
 This is a fact about the order, stored as order meta (`_fst_ship_mode`, `_fst_ship_with_order`, `_fst_ship_mode_date`) — never a shipment: nothing is tracked, no customer e-mail is sent and the order status is left alone. Choosing "With a label" again clears it; so does adding tracking to the order.
+
+A local pickup is reported under the day it was marked; changing its materials later does not move it to another day. An order that has other orders in its box cannot be marked as a local pickup — it would leave them without a box.
 
 #### Import label costs
 

@@ -1034,9 +1034,11 @@ class FST_Supplies {
      *    (any letter case). An unknown supply is an error, not a guess.
      *  - A quantity is 0 or more with at most two decimals; 0 (or empty)
      *    removes the line. The same supply on two lines is added up.
-     *  - A line already on the record keeps the unit cost it was recorded
-     *    at; a new line takes the supply's current price each (0 until a
-     *    purchase is logged). `unit_cost` on a line overrides both.
+     *  - A line already on the record keeps the name, role, unit and unit
+     *    cost it was recorded with; a new line takes the supply's as they
+     *    are now (a price each of 0 until a purchase is logged). A line
+     *    recorded at 0 was never priced, so it takes the price each once
+     *    there is one. `unit_cost` on a line overrides the price, 0 included.
      *  - `lines`, `foam_cost` and `paper_cost` are each optional: one that
      *    is absent keeps what the record holds (nothing / 0.00 on a new one).
      *
@@ -1137,21 +1139,28 @@ class FST_Supplies {
                     if ( ! is_int( $rate ) ) {
                         return new WP_Error( 'fst_invalid_materials', sprintf( 'The unit cost of %s must be an amount of 0 or more, for example 0.60.', $supply['name'] ) );
                     }
-                } elseif ( isset( $recorded[ $supply_id ] ) ) {
-                    $rate = self::to_ten_thousandths( $recorded[ $supply_id ]['unit_cost'] );
                 } else {
-                    $rate = isset( $prices[ $supply_id ] ) ? self::to_ten_thousandths( $prices[ $supply_id ] ) : 0;
+                    // Recorded at 0 = never priced: the supply had no purchase
+                    // logged yet. It takes the price each once there is one.
+                    $rate = isset( $recorded[ $supply_id ] ) ? self::to_ten_thousandths( $recorded[ $supply_id ]['unit_cost'] ) : 0;
+                    if ( 0 === $rate && isset( $prices[ $supply_id ] ) ) {
+                        $rate = self::to_ten_thousandths( $prices[ $supply_id ] );
+                    }
                 }
 
                 if ( isset( $lines[ $supply_id ] ) ) {
                     $lines[ $supply_id ]['qty'] += $qty;
                     continue;
                 }
+                // Recorded name, role and unit stay: a supply renamed or given
+                // another use since must not move history to another part of
+                // the split.
+                $snapshot            = isset( $recorded[ $supply_id ] ) ? $recorded[ $supply_id ] : $supply;
                 $lines[ $supply_id ] = array(
                     'supply_id' => $supply_id,
-                    'name'      => $supply['name'],
-                    'role'      => $supply['role'],
-                    'unit'      => $supply['unit'],
+                    'name'      => $snapshot['name'],
+                    'role'      => $snapshot['role'],
+                    'unit'      => $snapshot['unit'],
                     'qty'       => $qty,
                     'rate'      => $rate,
                 );

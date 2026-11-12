@@ -95,6 +95,7 @@ fst_assert_error( FST_Ship_Mode::check( $with, array( 'host_exists' => false ) +
 fst_assert_error( FST_Ship_Mode::check( $with, array( 'host_mode' => 'with_order' ) + $facts ), 'fst_invalid_ship_mode', 'no chains: the other order must not itself be in someone else\'s box' );
 fst_assert_error( FST_Ship_Mode::check( $with, array( 'host_mode' => 'local' ) + $facts ), 'fst_invalid_ship_mode', 'a local pickup has no box to go in' );
 fst_assert_error( FST_Ship_Mode::check( $with, array( 'has_riders' => true ) + $facts ), 'fst_invalid_ship_mode', 'an order that carries others cannot be carried' );
+fst_assert_error( FST_Ship_Mode::check( $local, array( 'has_riders' => true ) + $facts ), 'fst_invalid_ship_mode', 'nor be a local pickup: it would have no box for them to be in' );
 
 // ---------------------------------------------------------------------------
 // The service: order meta only.
@@ -173,6 +174,8 @@ $fst_test_orders[300] = new WC_Order( 300, array( 7 ) );
 $fst_test_orders[301] = new WC_Order( 301, array( 8 ) );
 $service->set_ship_mode( 301, array( 'mode' => 'with_order', 'with_order_id' => 300 ) );
 fst_assert_error( $service->set_ship_mode( 300, array( 'mode' => 'with_order', 'with_order_id' => 201 ) ), 'fst_invalid_ship_mode', 'an order that carries another cannot be carried' );
+fst_assert_error( $service->set_ship_mode( 300, array( 'mode' => 'local' ) ), 'fst_invalid_ship_mode', 'nor become a local pickup: 301 would be in a box that does not exist' );
+fst_assert_same( array( 'label', array( 301 ) ), array( FST_Ship_Mode::get( 300 )['mode'], FST_Ship_Mode::get_riders_of( 300 ) ), 'it stays as it was, and so does the order it carries' );
 fst_assert_same( 'local', $service->set_ship_mode( 201, array( 'mode' => 'local' ) )['mode'], 'a local pickup without materials is fine too' );
 
 // Switching and clearing.
@@ -197,6 +200,20 @@ fst_assert_same(
 );
 fst_assert_same( true, in_array( 'ShipTracker: tracking was added, so this order is no longer marked as a local pickup.', $fst_test_orders[102]->notes, true ), 'a note says why' );
 
+// The same when the tracking number is saved with the order form (no AJAX).
+$fst_test_orders[103] = new WC_Order( 103, array( 9 ) );
+$service->set_ship_mode( 103, array( 'mode' => 'local', 'materials' => array( 'lines' => array( array( 'supply_id' => 1, 'qty' => 2 ) ) ) ) );
+fst_assert_same( '498.00', FST_Supplies::get_stock()[1]['on_hand'], 'a pickup that used two bags' );
+$_POST = array( 'fst_tracking_nonce_field' => 'valid', 'fst_tracking_number' => 'FORM-1', 'fst_carrier' => 'ups' );
+$service->save_tracking_data( 103 );
+$_POST = array();
+fst_assert_same(
+    array( 1, 'label', null, '500.00' ),
+    array( count( FST_Shipment::get_by_order( 103 ) ), FST_Ship_Mode::get( 103 )['mode'], FST_Supplies::get_order_materials( 103 ), FST_Supplies::get_stock()[1]['on_hand'] ),
+    'gets its tracking through the order form: the mark is gone and its bags are counted once, not as a pickup too'
+);
+fst_assert_same( true, in_array( 'ShipTracker: tracking was added, so this order is no longer marked as a local pickup.', $fst_test_orders[103]->notes, true ), 'with the same note' );
+
 // What the report reads.
 $marked = array();
 foreach ( FST_Ship_Mode::get_marked_orders() as $entry ) {
@@ -208,6 +225,31 @@ fst_assert_same( array( 101 => 'with_order:200', 201 => 'local', 301 => 'with_or
 $fst_test_orders[500] = new WC_Order( 500, array( 90 ), array( '_fishotel_is_fulfillment' => '1', '_fishotel_fulfillment_sources' => '201, 202' ), 'fulfillment' );
 fst_assert_same( array( 500, 201, 202 ), FST_Ship_Mode::host_order_ids( $fst_test_orders[500] ), 'a combined box\'s boxes are on its source orders, so those are looked at too' );
 fst_assert_same( array( 200 ), FST_Ship_Mode::host_order_ids( $fst_test_orders[200] ), 'a regular order holds its own boxes' );
+
+// The day of a mark. Neither screen sends one when a pickup's materials are
+// saved again, and a local pickup is reported under the day it was marked.
+$fst_test_orders[600] = new WC_Order( 600, array( 60 ) );
+$service->set_ship_mode( 600, array( 'mode' => 'local', 'date' => '2026-11-05', 'materials' => array( 'lines' => array( array( 'supply_id' => 1, 'qty' => 3 ) ) ) ) );
+
+$fst_test_now     = '2026-11-12 16:30:00';
+$fst_test_user_id = 9;
+$result           = $service->set_ship_mode( 600, array( 'mode' => 'local', 'materials' => array( 'lines' => array( array( 'supply_id' => 1, 'qty' => 4 ) ) ) ) );
+fst_assert_same(
+    array( '2026-11-05 00:00:00', '4.00', 7 ),
+    array( $result['date'], $result['materials']['lines'][0]['qty'], $fst_test_orders[600]->get_meta( '_fst_ship_mode_by' ) ),
+    'materials changed a week later, no day sent: still the pickup of the 5th, marked by whoever marked it'
+);
+fst_assert_same( '2026-11-06 00:00:00', $service->set_ship_mode( 600, array( 'mode' => 'local', 'date' => '2026-11-06' ) )['date'], 'a day that is sent still corrects it' );
+
+$result = $service->set_ship_mode( 600, array( 'mode' => 'with_order', 'with_order_id' => 200 ) );
+fst_assert_same( array( '2026-11-12 16:30:00', 9 ), array( $result['date'], $fst_test_orders[600]->get_meta( '_fst_ship_mode_by' ) ), 'another mode is a new mark: made now, by whoever made it' );
+$fst_test_now = '2026-11-13 08:00:00';
+fst_assert_same( '2026-11-12 16:30:00', $service->set_ship_mode( 600, array( 'mode' => 'with_order', 'with_order_id' => 200 ) )['date'], 'the same box saved again keeps its day' );
+fst_assert_same( '2026-11-13 08:00:00', $service->set_ship_mode( 600, array( 'mode' => 'with_order', 'with_order_id' => 102 ) )['date'], 'another order\'s box is a new mark' );
+
+$service->set_ship_mode( 600, array( 'mode' => 'label' ) );
+$fst_test_now     = '2026-11-02 09:00:00';
+$fst_test_user_id = 7;
 
 // ---------------------------------------------------------------------------
 // Shared-cost maths: the box counts the shipping of the order that came along.

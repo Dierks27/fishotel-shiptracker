@@ -41,9 +41,9 @@ class FST_Ship_Mode {
      * Normalise the arguments of a ship mode change — pure.
      *
      * @param array $args mode (label | local | with_order), with_order_id (for with_order),
-     *                    date (optional Y-m-d: the day it went out; default now).
+     *                    date (optional Y-m-d: the day it went out).
      * @return array|WP_Error mode, with_order_id (0 unless with_order), date (Y-m-d H:i:s or
-     *                        null = now) — or `fst_invalid_ship_mode`.
+     *                        null = not given, see write()) — or `fst_invalid_ship_mode`.
      */
     public static function normalize_args( array $args ) {
         $mode = isset( $args['mode'] ) && is_scalar( $args['mode'] ) ? strtolower( trim( (string) $args['mode'] ) ) : '';
@@ -85,7 +85,8 @@ class FST_Ship_Mode {
      * or go in another order's box; the other order must exist, must not be
      * this one, must have a box to go in (not a local pickup) and must not
      * itself have gone in someone else's box; and an order that carries
-     * other orders cannot be carried.
+     * other orders cannot be carried, nor be a local pickup (it would have
+     * no box for them to be in).
      *
      * @param array $normalized normalize_args() result.
      * @param array $facts      order_id, has_shipments, host_exists, host_mode ('' when no
@@ -103,6 +104,11 @@ class FST_Ship_Mode {
         }
 
         if ( 'with_order' !== $normalized['mode'] ) {
+            // A local pickup has no box: the orders marked as gone in this
+            // order's box would be counted nowhere.
+            if ( ! empty( $facts['has_riders'] ) ) {
+                return new WP_Error( 'fst_invalid_ship_mode', 'Other orders went in this order\'s box, so it cannot be a local pickup.' );
+            }
             return true;
         }
 
@@ -199,6 +205,10 @@ class FST_Ship_Mode {
     /**
      * Store a mode on an order (or, for `label`, remove it).
      *
+     * A mark that stays what it was — same mode, same other order — keeps
+     * the day it was made and who made it unless a day is given: saving a
+     * pickup's materials again must not move it to today in the reports.
+     *
      * @param WC_Order $order
      * @param array    $normalized normalize_args() result, already checked.
      */
@@ -208,14 +218,23 @@ class FST_Ship_Mode {
             return;
         }
 
+        $before = self::get( $order );
+        $same   = $before['mode'] === $normalized['mode'] && (int) $before['with_order_id'] === (int) $normalized['with_order_id'];
+
         $order->update_meta_data( self::META_MODE, $normalized['mode'] );
         if ( 'with_order' === $normalized['mode'] ) {
             $order->update_meta_data( self::META_WITH, (int) $normalized['with_order_id'] );
         } else {
             $order->delete_meta_data( self::META_WITH );
         }
-        $order->update_meta_data( self::META_DATE, $normalized['date'] ? $normalized['date'] : current_time( 'mysql' ) );
-        $order->update_meta_data( self::META_BY, function_exists( 'get_current_user_id' ) ? get_current_user_id() : 0 );
+        if ( $normalized['date'] ) {
+            $order->update_meta_data( self::META_DATE, $normalized['date'] );
+        } elseif ( ! $same || ! $before['date'] ) {
+            $order->update_meta_data( self::META_DATE, current_time( 'mysql' ) );
+        }
+        if ( ! $same ) {
+            $order->update_meta_data( self::META_BY, function_exists( 'get_current_user_id' ) ? get_current_user_id() : 0 );
+        }
         $order->save();
     }
 

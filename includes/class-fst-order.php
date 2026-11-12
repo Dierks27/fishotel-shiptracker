@@ -1568,7 +1568,8 @@ class FST_Order {
      * @param array $args {
      *     @type string $mode          label | local | with_order.
      *     @type int    $with_order_id The order whose box it went in (with_order).
-     *     @type string $date          Optional Y-m-d — the day it went out; default now.
+     *     @type string $date          Optional Y-m-d — the day it went out. Left out: now for a new
+     *                                 mark; a mark that stays what it was keeps its day.
      *     @type mixed  $materials     Optional, local only — see add_tracking(). Absent leaves
      *                                 what is recorded; null / '' removes it.
      * }
@@ -1598,7 +1599,7 @@ class FST_Order {
                 'has_shipments' => ! empty( $this->get_effective_shipments( $order_id ) ),
                 'host_exists'   => $host instanceof WC_Order,
                 'host_mode'     => $host_state['mode'],
-                'has_riders'    => 'with_order' === $normalized['mode'] && ! empty( FST_Ship_Mode::get_riders_of( $order_id ) ),
+                'has_riders'    => ! empty( FST_Ship_Mode::get_riders_of( $order_id ) ),
             ) );
             if ( is_wp_error( $allowed ) ) {
                 return $allowed;
@@ -1832,6 +1833,10 @@ class FST_Order {
             ) );
             if ( $created_id ) {
                 $created_ids[] = $created_id;
+
+                // A label of its own ends "local pickup" / "went in another
+                // order's box" here too, as in add_tracking().
+                $this->end_ship_mode( $source_order );
             }
 
             if ( $source_order && 'processing' === $source_order->get_status()

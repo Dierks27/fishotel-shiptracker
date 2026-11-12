@@ -112,6 +112,17 @@ function get_current_user_id() {
     return $fst_test_user_id;
 }
 
+function wp_unslash( $value ) {
+    return $value;
+}
+
+/**
+ * The order form's nonce: only the literal "valid" passes.
+ */
+function wp_verify_nonce( $nonce, $action = -1 ) {
+    return 'valid' === $nonce ? 1 : false;
+}
+
 class WP_Error {
     private $code;
     private $message;

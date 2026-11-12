@@ -369,9 +369,9 @@ $edited = $service->set_label_cost( $added['shipment_id'], array( 'materials' =>
     array( 'supply_id' => 2, 'qty' => 1 ),
 ) ) ) );
 fst_assert_same(
-    array( '1 x Small box @ 1.2500 = 1.25', '7 x Fish bag (4 mil) @ 0.1100 = 0.77', '1 x Ice pack @ 0.9000 = 0.90' ),
+    array( '1 x Small box @ 1.2500 = 1.25', '7 x Fish bag @ 0.1100 = 0.77', '1 x Ice pack @ 0.9000 = 0.90' ),
     fst_test_lines( $edited['materials'] ),
-    'changing 6 bags to 7 keeps 0.11 each (not today\'s 0.15); the heat pack left off is removed; the new ice pack line costs today\'s price'
+    'changing 6 bags to 7 keeps 0.11 each (not today\'s 0.15) and the name it was recorded under; the heat pack left off is removed; the new ice pack line costs today\'s price'
 );
 fst_assert_same( array( '1.80', '0.40' ), array( $edited['materials']['foam_cost'], $edited['materials']['paper_cost'] ), 'foam and paper were not sent, so they stay as recorded' );
 fst_assert_same( array( '5.12', '23.52' ), array( $edited['materials_total'], $edited['total_cost'] ), 'the total follows: 1.25 + 0.77 + 0.90 + 1.80 + 0.40, and 18.40 more with the label' );
@@ -380,7 +380,7 @@ $edited = $service->set_label_cost( $added['shipment_id'], array( 'materials' =>
 fst_assert_same( array( 3, '2.00', '0.40' ), array( count( $edited['materials']['lines'] ), $edited['materials']['foam_cost'], $edited['materials']['paper_cost'] ), 'sending only the foam cost changes only the foam cost' );
 
 $edited = $service->set_label_cost( $added['shipment_id'], array( 'materials' => array( 'lines' => array( array( 'supply_id' => 3, 'qty' => 7, 'unit_cost' => '0.2' ) ) ) ) );
-fst_assert_same( array( '7 x Fish bag (4 mil) @ 0.2000 = 1.40' ), fst_test_lines( $edited['materials'] ), 'a unit cost sent with a line overrides the snapshot' );
+fst_assert_same( array( '7 x Fish bag @ 0.2000 = 1.40' ), fst_test_lines( $edited['materials'] ), 'a unit cost sent with a line overrides the snapshot' );
 
 $edited = $service->set_label_cost( $added['shipment_id'], array( 'label_cost' => '19.00' ) );
 fst_assert_same( array( '19.00', '3.80' ), array( $edited['label_cost'], $edited['materials_total'] ), 'a cost change without the materials key leaves the materials alone' );
@@ -389,6 +389,69 @@ $edited = $service->set_label_cost( $added['shipment_id'], array( 'materials' =>
 fst_assert_same( array( null, null, '19.00' ), array( $edited['materials'], $edited['materials_total'], $edited['total_cost'] ), 'materials sent empty removes them; the box costs its label' );
 
 fst_assert_error( $service->set_label_cost( $added['shipment_id'], array() ), 'fst_no_cost_fields', 'nothing sent at all is still an error' );
+
+// A line recorded before its supply's first purchase was never priced: it
+// takes the price each the next time the box's materials are saved.
+$fst_test_orders[110] = new WC_Order( 110, array( 51 ) );
+$unpriced             = $service->add_tracking( array(
+    'order_id'        => 110,
+    'tracking_number' => 'BOX-10',
+    'carrier'         => 'ups',
+    'line_item_ids'   => array( 51 ),
+    'materials'       => array( 'lines' => array( array( 'supply_id' => 11, 'qty' => 6 ), array( 'supply_id' => 6, 'qty' => 1 ) ) ),
+) );
+fst_assert_same(
+    array( '6 x Rubber bands @ 0.0000 = 0.00', '1 x Small box @ 1.2500 = 1.25' ),
+    fst_test_lines( $unpriced['shipments'][0]['materials'] ),
+    'a line recorded before its supply\'s first purchase costs 0.00'
+);
+
+FST_Supplies::add_purchase( array( 'supply_id' => 11, 'purchase_date' => '2026-11-02', 'qty' => '144', 'total_paid' => '18.99' ) );
+fst_assert_same( '0.00', FST_Supplies::get_box_materials( 'BOX-10' )['lines'][0]['cost'], 'logging the purchase rewrites nothing by itself' );
+
+$same_lines = array( 'lines' => array( array( 'supply_id' => 11, 'qty' => 6 ), array( 'supply_id' => 6, 'qty' => 1 ) ) );
+$edited     = $service->set_label_cost( $unpriced['shipment_id'], array( 'materials' => $same_lines ) );
+fst_assert_same(
+    array( '6 x Rubber bands @ 0.1319 = 0.79', '1 x Small box @ 1.2500 = 1.25' ),
+    fst_test_lines( $edited['materials'] ),
+    'the same lines saved again: the line that had no price takes the price each, the priced line keeps its own'
+);
+
+$edited = $service->set_label_cost( $unpriced['shipment_id'], array( 'materials' => array( 'lines' => array( array( 'supply_id' => 11, 'qty' => 7, 'unit_cost' => '0' ), array( 'supply_id' => 6, 'qty' => 1 ) ) ) ) );
+fst_assert_same( '7 x Rubber bands @ 0.0000 = 0.00', fst_test_lines( $edited['materials'] )[0], 'a unit cost of 0 that is sent is taken as sent: these were free' );
+$edited = $service->set_label_cost( $unpriced['shipment_id'], array( 'materials' => array( 'lines' => array( array( 'supply_id' => 11, 'qty' => 7 ), array( 'supply_id' => 6, 'qty' => 1 ) ) ) ) );
+fst_assert_same( '7 x Rubber bands @ 0.1319 = 0.92', fst_test_lines( $edited['materials'] )[0], 'on record 0 means "not priced": to stay free it is sent with the line each time' );
+
+// A supply renamed, sold by another unit or given another use since: a line
+// already on a box keeps what it was recorded as, so its cost stays in the
+// same part of the split.
+$recorded_box                        = FST_Supplies::get_box_materials( 'BOX-8' );
+$saved_list                          = $fst_test_options['fst_supplies'];
+$fst_test_options['fst_supplies'][2] = array_merge( $fst_test_options['fst_supplies'][2], array( 'name' => 'Poly bag', 'unit' => 'bags', 'role' => '' ) );
+
+$box_8_lines = array( array( 'supply_id' => 6, 'qty' => 1 ), array( 'supply_id' => 3, 'qty' => 1 ), array( 'supply_id' => 1, 'qty' => 1 ) );
+$edited      = $service->set_label_cost( $new_box['shipment_id'], array( 'materials' => array( 'lines' => $box_8_lines ) ) );
+fst_assert_same( $recorded_box, $edited['materials'], 'the same lines saved again after the bag supply lost its use: the box is exactly as it was' );
+fst_assert_same( array( '0.15', '0.00' ), array( $edited['materials']['split']['bags'], $edited['materials']['split']['other'] ), 'its 0.15 is still under bags, not moved to other' );
+
+$edited   = $service->set_label_cost( $new_box['shipment_id'], array( 'materials' => array( 'lines' => array( array( 'supply_id' => 6, 'qty' => 1 ), array( 'supply' => 'poly bag', 'qty' => 2 ), array( 'supply_id' => 1, 'qty' => 1 ) ) ) ) );
+$bag_line = $edited['materials']['lines'][1];
+fst_assert_same(
+    array( 'Fish bag (4 mil)', 'fish_bag', 'each', '2.00', '0.30' ),
+    array( $bag_line['name'], $bag_line['role'], $bag_line['unit'], $bag_line['qty'], $edited['materials']['split']['bags'] ),
+    'a changed quantity — the supply found by its new name — keeps the recorded name, use and unit'
+);
+
+$edited   = $service->set_label_cost( $unpriced['shipment_id'], array( 'materials' => array( 'lines' => array( array( 'supply_id' => 3, 'qty' => 2 ) ) ) ) );
+$bag_line = $edited['materials']['lines'][0];
+fst_assert_same(
+    array( 'Poly bag', '', 'bags', '0.30', '0.00' ),
+    array( $bag_line['name'], $bag_line['role'], $bag_line['unit'], $edited['materials']['split']['other'], $edited['materials']['split']['bags'] ),
+    'a line that is new on a box takes the supply as it is now'
+);
+
+$service->set_label_cost( $new_box['shipment_id'], array( 'materials' => array( 'lines' => $box_8_lines ) ) );
+$fst_test_options['fst_supplies'] = $saved_list;
 
 // ---------------------------------------------------------------------------
 // Suggested foam and paper cost.
