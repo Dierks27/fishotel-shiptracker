@@ -20,6 +20,7 @@ class FST_Order {
         add_action( 'wp_ajax_fst_add_tracking', array( $this, 'ajax_add_tracking' ) );
         add_action( 'wp_ajax_fst_remove_tracking', array( $this, 'ajax_remove_tracking' ) );
         add_action( 'wp_ajax_fst_recheck_tracking', array( $this, 'ajax_recheck_tracking' ) );
+        add_action( 'wp_ajax_fst_set_label_cost', array( $this, 'ajax_set_label_cost' ) );
 
         // Add shipments column to WooCommerce orders list.
         add_filter( 'manage_edit-shop_order_columns', array( $this, 'add_orders_column' ) );
@@ -105,6 +106,24 @@ class FST_Order {
                                 }
                             }
                             ?>
+                            <?php
+                            // What this box cost to ship. Read by tracking number:
+                            // the cost belongs to the box, not to this row.
+                            $box = FST_Shipment::get_box_cost( $shipment->tracking_number );
+                            ?>
+                            <div class="fst-label-cost" style="margin-top: 4px; font-size: 12px;">
+                                <?php echo wp_kses_post( $this->describe_box_cost( $box ) ); ?>
+                                <a href="#" class="fst-cost-edit-toggle" style="margin-left: 4px;">
+                                    <?php echo $box && $box['cost_shipment_id'] ? 'Edit' : 'Add label cost'; ?>
+                                </a>
+                            </div>
+                            <div class="fst-cost-form" style="display: none; margin-top: 6px; padding: 8px; background: #f9f9f9; border: 1px solid #e0e0e0; border-radius: 4px;">
+                                <?php $this->render_cost_inputs( $box ? $box : array() ); ?>
+                                <button type="button" class="button button-small fst-cost-save-btn" data-id="<?php echo esc_attr( $shipment->id ); ?>">
+                                    Save label cost
+                                </button>
+                                <span class="fst-cost-message" style="margin-left: 6px; font-size: 12px;"></span>
+                            </div>
                             <div class="fst-shipment-actions">
                                 <a href="#" class="fst-recheck-btn" data-id="<?php echo esc_attr( $shipment->id ); ?>" title="Re-check status">
                                     &#x21bb; Re-check
@@ -192,11 +211,139 @@ class FST_Order {
                         <option value="usps">USPS</option>
                     </select>
                 </p>
+                <div id="fst-add-cost-fields" style="margin-bottom: 8px;">
+                    <p style="margin: 0 0 6px; font-weight: 600; font-size: 12px;">What this box cost to ship (optional):</p>
+                    <?php $this->render_cost_inputs( array(), true ); ?>
+                </div>
                 <button type="button" id="fst-add-tracking-btn" class="button button-primary widefat">
                     Add Tracking Info
                 </button>
                 <div id="fst-tracking-message" style="margin-top: 8px; display: none;"></div>
             </div>
+        </div>
+        <?php
+    }
+
+    /**
+     * One line describing a box's recorded cost for the meta box, e.g.
+     * "Label: $18.40 · 10x10x10 · 11 lb · Partner A".
+     *
+     * @param array|null $box FST_Shipment::get_box_cost() result.
+     * @return string HTML (escaped; the price markup comes from wc_price()).
+     */
+    private function describe_box_cost( $box ) {
+        if ( ! $box || ! $box['cost_shipment_id'] ) {
+            return '<span style="color: #999;">Label cost not recorded.</span>';
+        }
+
+        $parts = array();
+        if ( null !== $box['label_cost'] ) {
+            $parts[] = 'Label: ' . wc_price( $box['label_cost'] );
+        }
+        if ( null !== $box['box_dims'] ) {
+            $parts[] = esc_html( FST_Label_Cost::size_label( $box['box_dims'], FST_Settings::get_standard_boxes() ) );
+        }
+        if ( null !== $box['box_weight'] ) {
+            $parts[] = esc_html( FST_Label_Cost::trim_decimal( $box['box_weight'] ) . ' lb' );
+        }
+        if ( null !== $box['label_source'] ) {
+            $parts[] = esc_html( $box['label_source'] );
+        }
+
+        $line = implode( ' &middot; ', $parts );
+        if ( $box['shared_box'] ) {
+            $line .= sprintf( ' <span style="color: #999;">(one box, %d orders)</span>', count( $box['order_ids'] ) );
+        }
+
+        return $line;
+    }
+
+    /**
+     * Render the four optional cost inputs: label cost, box (a dropdown of
+     * the standard boxes plus Custom when any are saved), weight and label
+     * source (a dropdown when sources are saved, free text otherwise).
+     *
+     * admin.js reads them by class from the enclosing element, so the same
+     * markup serves the add form and each existing shipment's edit form.
+     *
+     * @param array $values Current label_cost / box_weight / box_dims / label_source.
+     * @param bool  $named  Give the inputs form names, for the non-AJAX
+     *                      fallback save of the add form (save_tracking_data()).
+     */
+    private function render_cost_inputs( array $values, $named = false ) {
+        $boxes   = FST_Settings::get_standard_boxes();
+        $sources = FST_Settings::get_label_sources();
+
+        $cost   = isset( $values['label_cost'] ) ? (string) $values['label_cost'] : '';
+        $weight = isset( $values['box_weight'] ) ? FST_Label_Cost::trim_decimal( $values['box_weight'] ) : '';
+        $dims   = isset( $values['box_dims'] ) ? (string) $values['box_dims'] : '';
+        $source = isset( $values['label_source'] ) ? (string) $values['label_source'] : '';
+
+        $is_standard = false;
+        foreach ( $boxes as $standard_box ) {
+            if ( $standard_box['dims'] === $dims ) {
+                $is_standard = true;
+                break;
+            }
+        }
+        $is_custom = '' !== $dims && ! $is_standard;
+
+        ?>
+        <div class="fst-cost-fields">
+            <p style="margin: 0 0 6px;">
+                <input type="text" class="fst-cost-amount widefat" inputmode="decimal"
+                       <?php echo $named ? 'name="fst_label_cost"' : ''; ?>
+                       placeholder="Label cost, e.g. 18.40" value="<?php echo esc_attr( $cost ); ?>">
+            </p>
+            <?php if ( ! empty( $boxes ) ) : ?>
+                <p style="margin: 0 0 6px;">
+                    <select class="fst-cost-box widefat" <?php echo $named ? 'name="fst_box_size"' : ''; ?>>
+                        <option value="">&mdash; Box size &mdash;</option>
+                        <?php
+                        // Two saved boxes of the same size: only the first is preselected.
+                        $preselected = false;
+                        foreach ( $boxes as $standard_box ) :
+                            $is_current  = ! $preselected && $standard_box['dims'] === $dims;
+                            $preselected = $preselected || $is_current;
+                            ?>
+                            <option value="<?php echo esc_attr( $standard_box['dims'] ); ?>" <?php selected( $is_current ); ?>>
+                                <?php echo esc_html( $standard_box['name'] . ' (' . $standard_box['dims'] . ')' ); ?>
+                            </option>
+                        <?php endforeach; ?>
+                        <option value="custom" <?php selected( $is_custom ); ?>>Custom size&hellip;</option>
+                    </select>
+                </p>
+            <?php endif; ?>
+            <p class="fst-cost-dims-row" style="margin: 0 0 6px;<?php echo ( ! empty( $boxes ) && ! $is_custom ) ? ' display: none;' : ''; ?>">
+                <input type="text" class="fst-cost-dims widefat"
+                       <?php echo $named ? 'name="fst_box_dims"' : ''; ?>
+                       placeholder="Box size in inches, e.g. 10x10x10" value="<?php echo esc_attr( $is_custom || empty( $boxes ) ? $dims : '' ); ?>">
+            </p>
+            <p style="margin: 0 0 6px;">
+                <input type="text" class="fst-cost-weight widefat" inputmode="decimal"
+                       <?php echo $named ? 'name="fst_box_weight"' : ''; ?>
+                       placeholder="Weight in lb" value="<?php echo esc_attr( $weight ); ?>">
+            </p>
+            <p style="margin: 0 0 6px;">
+                <?php if ( ! empty( $sources ) ) : ?>
+                    <select class="fst-cost-source widefat" <?php echo $named ? 'name="fst_label_source"' : ''; ?>>
+                        <option value="">&mdash; Label bought through &mdash;</option>
+                        <?php foreach ( $sources as $saved_source ) : ?>
+                            <option value="<?php echo esc_attr( $saved_source ); ?>" <?php selected( $saved_source, $source ); ?>>
+                                <?php echo esc_html( $saved_source ); ?>
+                            </option>
+                        <?php endforeach; ?>
+                        <?php if ( '' !== $source && ! in_array( $source, $sources, true ) ) : ?>
+                            <?php // Free text recorded earlier that is not on the list — keep it selectable. ?>
+                            <option value="<?php echo esc_attr( $source ); ?>" selected><?php echo esc_html( $source ); ?></option>
+                        <?php endif; ?>
+                    </select>
+                <?php else : ?>
+                    <input type="text" class="fst-cost-source widefat" maxlength="40"
+                           <?php echo $named ? 'name="fst_label_source"' : ''; ?>
+                           placeholder="Label bought through" value="<?php echo esc_attr( $source ); ?>">
+                <?php endif; ?>
+            </p>
         </div>
         <?php
     }
@@ -250,6 +397,9 @@ class FST_Order {
      * (string error message / success data with `message`) are the contract
      * the plugin's own meta box AND the theme's "Shipments" box rely on —
      * keep them stable. Sanitisation happens in normalize_add_tracking_args().
+     *
+     * Optional since 1.9.17: label_cost, box_weight, box_dims, label_source —
+     * what the box cost to ship. Leaving them out (or empty) records nothing.
      */
     public function ajax_add_tracking() {
         check_ajax_referer( 'fst_nonce', 'nonce' );
@@ -262,6 +412,11 @@ class FST_Order {
         foreach ( array( 'order_id', 'tracking_number', 'carrier', 'line_item_ids' ) as $field ) {
             if ( isset( $_POST[ $field ] ) ) {
                 $args[ $field ] = $_POST[ $field ]; // phpcs:ignore WordPress.Security -- sanitised by normalize_add_tracking_args().
+            }
+        }
+        foreach ( FST_Label_Cost::FIELDS as $field ) {
+            if ( isset( $_POST[ $field ] ) ) {
+                $args[ $field ] = wp_unslash( $_POST[ $field ] ); // phpcs:ignore WordPress.Security -- sanitised by normalize_add_tracking_args().
             }
         }
 
@@ -289,9 +444,18 @@ class FST_Order {
      *     @type int[]|string $line_item_ids   WC_Order_Item IDs in this box — array, or a
      *                                         comma-separated string for form-encoded callers.
      *     @type string       $ship_date       Optional Y-m-d. Null means "now" at create time.
+     *     @type string|float $label_cost      Optional. What the label cost: 0 or more, "$" and
+     *                                         thousands separators tolerated, rounded to cents.
+     *     @type string|float $box_weight      Optional. Pounds, above 0.
+     *     @type string       $box_dims        Optional. "10x10x10" in inches (also "10 x 10 x 10",
+     *                                         "10*10*10", "10X10X10 in") or a standard box name.
+     *     @type string       $label_source    Optional. Where the label was bought (40 characters).
      * }
-     * @return array|WP_Error Normalised args, or WP_Error with code
-     *                        `fst_missing_args` or `fst_invalid_ship_date`.
+     * @return array|WP_Error Normalised args — the four cost keys are always
+     *                        present, null when absent or empty — or WP_Error
+     *                        with code `fst_missing_args`, `fst_invalid_ship_date`,
+     *                        `fst_invalid_label_cost`, `fst_invalid_box_weight`
+     *                        or `fst_invalid_box_dims`.
      */
     public static function normalize_add_tracking_args( array $args ) {
         $order_id        = isset( $args['order_id'] ) && is_scalar( $args['order_id'] ) ? absint( $args['order_id'] ) : 0;
@@ -335,12 +499,22 @@ class FST_Order {
             $ship_date = $raw_date . ' 00:00:00';
         }
 
+        // What the box cost to ship — all optional (see FST_Label_Cost).
+        $cost_fields = FST_Label_Cost::normalize_fields( $args );
+        if ( is_wp_error( $cost_fields ) ) {
+            return $cost_fields;
+        }
+
         return array(
             'order_id'        => $order_id,
             'tracking_number' => $tracking_number,
             'carrier'         => $carrier,
             'line_item_ids'   => $line_item_ids,
             'ship_date'       => $ship_date,
+            'label_cost'      => $cost_fields['label_cost'],
+            'box_weight'      => $cost_fields['box_weight'],
+            'box_dims'        => $cost_fields['box_dims'],
+            'label_source'    => $cost_fields['label_source'],
         );
     }
 
@@ -353,6 +527,11 @@ class FST_Order {
      * carrier auto-detect, EasyPost routing / first carrier poll, order notes
      * and the Processing → Shipped transition.
      *
+     * The optional cost fields (label_cost, box_weight, box_dims,
+     * label_source) describe the BOX. However many rows the fan-out writes
+     * for the tracking number, they are stored once — see
+     * FST_Shipment::set_box_cost() — so no report can count a box twice.
+     *
      * @param array $args See normalize_add_tracking_args().
      * @return array|WP_Error {
      *     @type string $message           Human-readable summary (what the meta box shows).
@@ -364,7 +543,8 @@ class FST_Order {
      *     @type array  $shipments         Per-shipment summary after the first poll / EasyPost registration.
      *     @type array  $order_statuses    order_id => WooCommerce status after the transition.
      * }
-     * Error codes: fst_missing_args, fst_invalid_ship_date, fst_no_items,
+     * Error codes: fst_missing_args, fst_invalid_ship_date, fst_invalid_label_cost,
+     * fst_invalid_box_weight, fst_invalid_box_dims, fst_no_items,
      * fst_nothing_added (bad input), fst_order_not_found, fst_duplicate_tracking,
      * fst_create_failed. Messages are the ones the admin meta box shows.
      */
@@ -521,6 +701,20 @@ class FST_Order {
             return new WP_Error( 'fst_duplicate_tracking', 'This tracking number is already on this order.' );
         }
 
+        // One box, one cost: whatever was sent about the box is stored once
+        // for the tracking number — on the first row this call created,
+        // unless a row from an earlier call already holds it. Fields left
+        // out change nothing.
+        $cost_fields = array();
+        foreach ( FST_Label_Cost::FIELDS as $field ) {
+            if ( null !== $normalized[ $field ] ) {
+                $cost_fields[ $field ] = $normalized[ $field ];
+            }
+        }
+        if ( ! empty( $cost_fields ) ) {
+            FST_Shipment::set_box_cost( $tracking_number, $cost_fields, $shipment_ids[0] );
+        }
+
         // Register / poll each newly created shipment.
         foreach ( $shipment_ids as $sid ) {
             $this->poll_or_register_shipment( $sid, $carrier, $tracking_number );
@@ -563,6 +757,11 @@ class FST_Order {
      * int array (NULL stays NULL = covers every item of order_id), plus the
      * status label and carrier tracking URL. The DB row shape is untouched.
      *
+     * label_cost, box_weight, box_dims and label_source are the BOX's values
+     * (looked up by tracking number — the row itself may hold NULL when a
+     * sibling row carries them); `shared_box` is true when other orders have
+     * a row for the same tracking number.
+     *
      * @param object $row Shipment row (stdClass from FST_Shipment).
      * @return array
      */
@@ -575,6 +774,8 @@ class FST_Order {
             }
         }
 
+        $box = FST_Shipment::get_box_cost( $row->tracking_number );
+
         return array(
             'id'               => (int) $row->id,
             'order_id'         => (int) $row->order_id,
@@ -586,6 +787,11 @@ class FST_Order {
             'status_detail'    => isset( $row->status_detail ) ? $row->status_detail : '',
             'tracker_provider' => isset( $row->tracker_provider ) ? $row->tracker_provider : '',
             'line_item_ids'    => $line_item_ids,
+            'label_cost'       => $box ? $box['label_cost'] : null,
+            'box_weight'       => $box ? $box['box_weight'] : null,
+            'box_dims'         => $box ? $box['box_dims'] : null,
+            'label_source'     => $box ? $box['label_source'] : null,
+            'shared_box'       => $box ? $box['shared_box'] : false,
             'ship_date'        => isset( $row->ship_date ) ? $row->ship_date : null,
             'est_delivery'     => isset( $row->est_delivery ) ? $row->est_delivery : null,
             'delivered_date'   => isset( $row->delivered_date ) ? $row->delivered_date : null,
@@ -923,6 +1129,101 @@ class FST_Order {
     }
 
     /**
+     * Record or change what a box cost to ship — the service behind the
+     * fst_set_label_cost AJAX action and POST /fst/v1/shipment/{id}/cost.
+     *
+     * Acts on the BOX of the shipment (its tracking number), so it does not
+     * matter which of a shared box's rows is named.
+     *
+     * @param int   $shipment_id Any shipment row of the box.
+     * @param array $args        Any of label_cost, box_weight, box_dims, label_source.
+     *                           A key that is present with an empty value clears that
+     *                           field; a key that is absent leaves it as it is.
+     * @return array|WP_Error {
+     *     @type string      $message
+     *     @type int         $shipment_id
+     *     @type string      $tracking_number
+     *     @type string|null $label_cost      "18.40"; null = not recorded.
+     *     @type string|null $box_weight      Pounds, "11.00".
+     *     @type string|null $box_dims        "10x10x10".
+     *     @type string|null $label_source
+     *     @type bool        $shared_box      Other orders share this box.
+     *     @type int[]       $order_ids       Every order with a row for the box.
+     * }
+     * Error codes: fst_shipment_not_found, fst_no_cost_fields,
+     * fst_invalid_label_cost, fst_invalid_box_weight, fst_invalid_box_dims,
+     * fst_cost_save_failed.
+     */
+    public function set_label_cost( $shipment_id, array $args ) {
+        $shipment = FST_Shipment::get( absint( $shipment_id ) );
+        if ( ! $shipment ) {
+            return new WP_Error( 'fst_shipment_not_found', 'Shipment not found.' );
+        }
+
+        $fields = FST_Label_Cost::normalize_fields( $args, true );
+        if ( is_wp_error( $fields ) ) {
+            return $fields;
+        }
+        if ( empty( $fields ) ) {
+            return new WP_Error( 'fst_no_cost_fields', 'Nothing to save: send label_cost, box_weight, box_dims or label_source.' );
+        }
+
+        if ( ! FST_Shipment::set_box_cost( $shipment->tracking_number, $fields, (int) $shipment->id ) ) {
+            return new WP_Error( 'fst_cost_save_failed', 'Failed to save the label cost.' );
+        }
+
+        $box = FST_Shipment::get_box_cost( $shipment->tracking_number );
+
+        return array(
+            'message'         => 'Label cost saved.',
+            'shipment_id'     => (int) $shipment->id,
+            'tracking_number' => $shipment->tracking_number,
+            'label_cost'      => $box['label_cost'],
+            'box_weight'      => $box['box_weight'],
+            'box_dims'        => $box['box_dims'],
+            'label_source'    => $box['label_source'],
+            'shared_box'      => $box['shared_box'],
+            'order_ids'       => $box['order_ids'],
+        );
+    }
+
+    /**
+     * AJAX: record or change what a box cost to ship.
+     *
+     * POST: nonce (fst_nonce), shipment_id, and any of label_cost,
+     * box_weight, box_dims, label_source — an empty value clears that field,
+     * a field that is not posted is left alone. Same payload convention as
+     * ajax_add_tracking(): string error message / success data with `message`.
+     */
+    public function ajax_set_label_cost() {
+        check_ajax_referer( 'fst_nonce', 'nonce' );
+
+        if ( ! current_user_can( 'manage_woocommerce' ) ) {
+            wp_send_json_error( 'Permission denied.' );
+        }
+
+        $shipment_id = isset( $_POST['shipment_id'] ) ? absint( $_POST['shipment_id'] ) : 0;
+        if ( ! $shipment_id ) {
+            wp_send_json_error( 'Shipment ID required.' );
+        }
+
+        $args = array();
+        foreach ( FST_Label_Cost::FIELDS as $field ) {
+            if ( isset( $_POST[ $field ] ) ) {
+                $args[ $field ] = wp_unslash( $_POST[ $field ] ); // phpcs:ignore WordPress.Security -- sanitised by FST_Label_Cost::normalize_fields().
+            }
+        }
+
+        $result = $this->set_label_cost( $shipment_id, $args );
+
+        if ( is_wp_error( $result ) ) {
+            wp_send_json_error( $result->get_error_message() );
+        }
+
+        wp_send_json_success( $result );
+    }
+
+    /**
      * AJAX: Remove tracking from an order.
      */
     public function ajax_remove_tracking() {
@@ -997,6 +1298,7 @@ class FST_Order {
         }
 
         $target_order_ids = $this->resolve_target_order_ids( $order_id );
+        $created_ids      = array();
 
         foreach ( $target_order_ids as $target_id ) {
             // Avoid duplicates on the same order — duplicates ACROSS source
@@ -1012,17 +1314,46 @@ class FST_Order {
             $source_order  = wc_get_order( $target_id );
             $all_item_ids  = $source_order ? array_keys( $source_order->get_items() ) : array();
 
-            FST_Shipment::create( array(
+            $created_id = FST_Shipment::create( array(
                 'order_id'        => $target_id,
                 'tracking_number' => $tracking_number,
                 'carrier'         => $carrier,
                 'line_item_ids'   => ! empty( $all_item_ids ) ? wp_json_encode( $all_item_ids ) : null,
             ) );
+            if ( $created_id ) {
+                $created_ids[] = $created_id;
+            }
 
             if ( $source_order && 'processing' === $source_order->get_status()
                  && $this->is_order_fully_shipped( $source_order ) ) {
                 $source_order->set_status( 'shipped', 'ShipTracker: all items now have tracking.' );
                 $source_order->save();
+            }
+        }
+
+        // The add form's optional cost fields, stored once for the box. This
+        // path cannot show an error, so values that do not validate are
+        // dropped — the cost can be added on the shipment afterwards.
+        if ( ! empty( $created_ids ) ) {
+            $box_size = isset( $_POST['fst_box_size'] ) ? sanitize_text_field( wp_unslash( $_POST['fst_box_size'] ) ) : 'custom';
+            $raw_cost = array(
+                'label_cost'   => isset( $_POST['fst_label_cost'] ) ? sanitize_text_field( wp_unslash( $_POST['fst_label_cost'] ) ) : '',
+                'box_weight'   => isset( $_POST['fst_box_weight'] ) ? sanitize_text_field( wp_unslash( $_POST['fst_box_weight'] ) ) : '',
+                'box_dims'     => 'custom' === $box_size
+                    ? ( isset( $_POST['fst_box_dims'] ) ? sanitize_text_field( wp_unslash( $_POST['fst_box_dims'] ) ) : '' )
+                    : $box_size,
+                'label_source' => isset( $_POST['fst_label_source'] ) ? sanitize_text_field( wp_unslash( $_POST['fst_label_source'] ) ) : '',
+            );
+
+            $cost_fields = array();
+            foreach ( $raw_cost as $field => $value ) {
+                $parsed = FST_Label_Cost::normalize_fields( array( $field => $value ), true );
+                if ( ! is_wp_error( $parsed ) && null !== $parsed[ $field ] ) {
+                    $cost_fields[ $field ] = $parsed[ $field ];
+                }
+            }
+            if ( ! empty( $cost_fields ) ) {
+                FST_Shipment::set_box_cost( $tracking_number, $cost_fields, $created_ids[0] );
             }
         }
     }

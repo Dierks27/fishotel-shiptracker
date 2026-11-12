@@ -1,6 +1,6 @@
 # FisHotel ShipTracker - Project Overview & Instruction Manual
 
-**Version:** 1.9.16
+**Version:** 1.9.17
 **Author:** FisHotel
 **Type:** WordPress / WooCommerce Plugin (Proprietary)
 **Repository:** Dierks27/fishotel-shiptracker
@@ -19,6 +19,7 @@ Key capabilities:
 - Admin analytics dashboard with date range filtering
 - WordPress admin dashboard widget for at-a-glance status
 - Ship Date column on WooCommerce Orders page
+- Records what each box actually cost to ship (label cost, box size, weight, where the label was bought) and reports it against the shipping customers paid
 - Migration tool for importing from AST/TrackShip plugins
 - Auto-updates from GitHub releases
 
@@ -111,6 +112,18 @@ Customize the customer-facing tracking display colors:
 - **Debug Logging** - Writes detailed logs to `wp-content/fst-debug.log`
 - **Data Retention** - How long to keep shipment history in days (0 = forever, default 1095 / 3 years)
 
+### Boxes & label costs
+Two editable lists, both empty until the owner fills them in (nothing is seeded), saved through the normal settings form:
+- **Standard Boxes** - name + length, width, height in inches. Offered as a dropdown wherever a label cost is entered; a box name is also accepted as `box_dims` and stored as its size. Option `fst_standard_boxes`, read with `FST_Settings::get_standard_boxes()`.
+- **Label Sources** - the partners labels are bought through (e.g. "Partner A", "Partner B"). Option `fst_label_sources`, read with `FST_Settings::get_label_sources()`. A shipment may still hold free text that is not on the list.
+
+Below the lists, **Import label costs** (its own form: `manage_woocommerce` + nonce `fst_import_label_costs`): upload a CSV (2 MB limit, checked before the file is read) or paste the rows.
+- The header row is required; columns are found by their header text: tracking / tracking number / tracking #, and cost / amount / total / charge / price. Optional: weight (pounds — a column headed oz / kg is ignored), dimensions / box (or separate Length, Width, Height columns), source.
+- **These labels were bought through** applies to the whole file when it has no source column.
+- Only tracking numbers that already exist are touched, and only the four cost fields (not even `updated_at`). Without **Overwrite**, a box that already has a cost keeps it and only its empty fields are filled.
+- The report lists: matched, already had a cost, not found, invalid (with row numbers and reasons). A tracking number a spreadsheet turned into scientific notation (`9.40011E+21`) is reported as invalid, never guessed; a tracking number listed twice with different costs is invalid on both rows.
+- Handles a UTF-8 / UTF-16 BOM, CRLF, quoted fields and tab- or semicolon-separated text.
+
 ### Migration
 Import tracking data from Advanced Shipment Tracking (AST) or TrackShip plugins:
 1. Click **Scan for Tracking Data** to preview what's available
@@ -130,6 +143,30 @@ Import tracking data from Advanced Shipment Tracking (AST) or TrackShip plugins:
 5. The plugin will immediately poll the carrier API for the first status
 
 Scripts (the Finiship label skill) do the same thing through `POST /fst/v1/shipment` with an application password — see REST API Endpoints below. Both paths call `FST_Order::add_tracking()`; `ajax_add_tracking()` is only a `$_POST` wrapper around it, so the AJAX field names (`order_id`, `tracking_number`, `carrier`, `line_item_ids[]`) and payloads are unchanged.
+
+### Recording What a Box Cost to Ship
+The price of a label is known when it is bought, so it is recorded with the tracking number. Four optional fields travel with `add_tracking()` (meta box, `fst_add_tracking`, `POST /fst/v1/shipment`):
+
+| Field | Stored as | Accepted |
+|-------|-----------|----------|
+| `label_cost` | `DECIMAL(10,2)`, e.g. `18.40` | 0 or more; `$` and thousands separators tolerated (`$1,018.4`); rounded to cents. Negative / non-numeric → `fst_invalid_label_cost` |
+| `box_weight` | `DECIMAL(6,2)` pounds | above 0; a trailing `lb` / `lbs` tolerated → else `fst_invalid_box_weight` |
+| `box_dims` | `LxWxH` inches, e.g. `10x10x10` | `10x10x10`, `10 x 10 x 10`, `10*10*10`, `10X10X10 in`, a list of three numbers, or the **name** of a standard box (stored as its size) → else `fst_invalid_box_dims` |
+| `label_source` | up to 40 characters | free text; a value matching a saved label source takes the saved spelling |
+
+An empty value means "not recorded" and is stored as `NULL` — never `0`. A cost of `0` is a real, recorded cost.
+
+**One box, one cost.** A tracking number is one physical box. When fan-out writes several rows for one tracking number, the four fields are stored on ONE row only (the first row that call created; if a row from an earlier call already holds them, that row keeps holding them) and every other row of the tracking number stays `NULL`. The box is always read by tracking number, never by row, so no sum can count a box twice. When the row holding the fields is removed while sibling rows remain, the fields move to the oldest surviving row (`FST_Shipment::delete()`).
+
+Helpers on `FST_Shipment` (the theme should probe `method_exists( 'FST_Shipment', 'get_order_boxes' )`):
+- `get_box_cost( $tracking_number )` → `tracking_number`, `label_cost`, `box_weight`, `box_dims`, `label_source` (decimal strings; `null` = not recorded), `shared_box`, `order_ids[]`, `shipment_ids[]`, `cost_shipment_id`; `null` when no shipment has that number.
+- `set_box_cost( $tracking_number, array $fields, $preferred_id = 0 )` → only the keys present change; a `null` value clears that field. Leaves `updated_at` alone.
+- `clear_box_cost( $tracking_number )`.
+- `get_order_boxes( $order_ids )` → one entry per distinct tracking number of the order(s), oldest first: the `get_box_cost()` keys plus `shipment_id`, `carrier`, `status`, `ship_date`.
+
+**Changing it later:** `FST_Order::set_label_cost( $shipment_id, array $args )`, behind the AJAX action `fst_set_label_cost` (nonce `fst_nonce` in `nonce`, `manage_woocommerce`; POST `shipment_id` + any of the four fields) and `POST /fst/v1/shipment/{id}/cost`. A field sent empty clears it; a field that is not sent is left alone. It acts on the box of that shipment, whichever row is named. AJAX success data / REST 200 body: `message`, `shipment_id`, `tracking_number`, the four fields, `shared_box`, `order_ids[]`; AJAX errors are a string message, as for `fst_add_tracking`.
+
+The plugin's own meta box (used when the theme's Shipments box is off) has the same optional fields on the add form — box as a dropdown of the standard boxes plus "Custom size", source as a dropdown when sources are saved — and shows / edits them on each existing shipment.
 
 ### Fulfillment Order Fan-Out
 When tracking is added to a Fulfillment order (a combined-box meta order with status `wc-fulfillment` owned by the Phase 2.5 fulfillment workflow), ShipTracker fans the tracking number out to every source order listed in the `_fishotel_fulfillment_sources` meta. This creates one `wp_fst_shipments` row per source order, all sharing the same tracking number — which is how customers on the source orders actually receive shipment emails (the fulfillment order itself is `customer = Guest`).
@@ -190,6 +227,16 @@ Shipments with "Unknown" or "Label Created" status are excluded from all analyti
 - **Carrier Volume** - Shipments per carrier with percentages
 - **Avg. Delivery Time by Carrier** - Comparison of carrier speed
 
+### Label Costs
+For the boxes shipped in the selected range (ship date, the last day included, same Unknown / Label Created exclusion), built by `FST_Label_Cost::get_report()` → `build_report()`:
+- **Cards** - boxes shipped, with / without a recorded cost, total label cost, shipping customers paid, the difference (paid − cost), average cost per box.
+- **By Box Size** - boxes, average cost, average shipping paid, average difference.
+- **By Label Source** - boxes, total and average cost.
+- **Average Cost per Box Size, by Label Source** - side by side, the cheaper source for each size highlighted (named sources only; a tie highlights nobody).
+- **The 20 Boxes That Lost the Most** - linked order numbers, tracking, size, source, cost, shipping paid, difference.
+
+Rules: boxes without a recorded cost are counted as shipped but left out of every total, average and difference (the page says so, and says how much shipping was paid for them) — `NULL` is never treated as 0. "Shipping paid" is the order's shipping total excluding tax, less any shipping refunded. A box shared by several orders counts the shipping of all of them; an order that went out in several boxes has its shipping split evenly between its boxes (spare cents to the earliest), so it is counted once. Money is summed in whole cents and shown through `wc_price()`.
+
 ---
 
 ## Customer Experience
@@ -217,6 +264,7 @@ The plugin creates two custom tables:
 - last_checked, last_event_at, tracking_data, check_count
 - easypost_tracker_id, tracker_provider (EasyPost integration; DB version 1.1.0)
 - line_item_ids (DB version 1.2.0; JSON array of WC_Order_Item IDs in this shipment, NULL = covers all items of order_id)
+- label_cost DECIMAL(10,2), box_weight DECIMAL(6,2) (lb), box_dims VARCHAR(40) ("LxWxH" inches), label_source VARCHAR(40) (DB version 1.3.0; all NULL = not recorded, never 0 by default). These describe the BOX (tracking number), are filled on one row per tracking number only, and are read / written through `FST_Shipment::get_box_cost()` / `set_box_cost()` — never sum `label_cost` over raw rows
 - created_at, updated_at
 - Indexes on: order_id, tracking_number, status, carrier, last_checked, easypost_tracker_id, tracker_provider
 - Note: `tracking_number` is no longer globally unique — duplicates are allowed across DIFFERENT `order_id` values (combined-box fan-out). The same tracking_number+order_id pair is still rejected.
@@ -245,7 +293,8 @@ fishotel-shiptracker/
 │   ├── class-fst-order.php          # Order meta box, columns (Tracking + Ship Date)
 │   ├── class-fst-rest-api.php       # REST API endpoints
 │   ├── class-fst-settings.php       # Settings page with all tabs
-│   ├── class-fst-shipment.php       # Shipment data model (CRUD, queries, analytics)
+│   ├── class-fst-shipment.php       # Shipment data model (CRUD, queries, analytics, box cost helpers)
+│   ├── class-fst-label-cost.php     # Label costs: field normalisation, one-box-one-cost, CSV import, report maths (no DB)
 │   ├── class-fst-tracker.php        # Polling engine (cron-driven) + EasyPost poll/promote/backfill
 │   ├── class-fst-easypost.php       # EasyPost aggregator (trackers, webhook, signature, backfill)
 │   ├── class-fst-updater.php        # GitHub release auto-updater
@@ -255,8 +304,13 @@ fishotel-shiptracker/
 │       └── class-fst-carrier-usps.php # USPS API (OAuth 2.0 + tracking)
 ├── assets/
 │   └── css/frontend.css             # Customer-facing styles
-└── tests/
-    └── add-tracking-args-test.php   # Plain-PHP test of FST_Order::normalize_add_tracking_args() (php tests/add-tracking-args-test.php)
+└── tests/                           # Plain PHP, no WordPress: for t in tests/*-test.php; do php "$t" || break; done
+    ├── bootstrap.php                # Stubs, in-memory $wpdb and WC_Order double for the label-cost tests
+    ├── add-tracking-args-test.php   # FST_Order::normalize_add_tracking_args()
+    ├── label-cost-args-test.php     # Money / weight / box-size spellings, standard box names, absent vs empty
+    ├── label-cost-box-test.php      # One box, one cost: fan-out rows, removing the holding row
+    ├── label-cost-import-test.php   # CSV reading, header detection, row validation, the import itself
+    └── label-cost-report-test.php   # Report maths: shared boxes, multi-box orders, NULL never 0
 ```
 
 ### REST API Endpoints
@@ -265,7 +319,9 @@ fishotel-shiptracker/
 |----------|--------|------|-------------|
 | `/fst/v1/shipment` | POST | Admin | Add tracking to an order via `FST_Order::add_tracking()` — the same service as the meta box (fan-out, coverage, dedupe, auto-detect, EasyPost/first poll, order notes + status) |
 | `/fst/v1/order/{id}/shipments` | GET | Admin | Effective shipments (`get_effective_shipments()`) + line-item coverage for an order |
-| `/fst/v1/shipment/{id}` | GET | Admin | Get shipment details + events |
+| `/fst/v1/shipment/{id}` | GET | Admin | Get shipment details + events (the four cost fields are the box's, plus `shared_box`) |
+| `/fst/v1/shipment/{id}/cost` | POST | Admin | Record / change what the box of that shipment cost via `FST_Order::set_label_cost()` |
+| `/fst/v1/shipping-options` | GET | Admin | `standard_boxes[]` (`name`, `length`, `width`, `height`, `dims`) and `label_sources[]` from Settings → Boxes & label costs |
 | `/fst/v1/shipment/{id}/recheck` | POST | Admin | Force tracking update |
 | `/fst/v1/track` | POST | Public | Customer lookup by order # + email |
 | `/fst/v1/analytics` | GET | Admin | Status counts and late shipments |
@@ -273,7 +329,7 @@ fishotel-shiptracker/
 
 "Admin" = `permission_callback` is `admin_check()` → `current_user_can( 'manage_woocommerce' )`. It works with cookie + `X-WP-Nonce` (admin.js) **and** with WordPress Application Passwords sent as HTTP Basic auth over HTTPS: the plugin hooks neither `determine_current_user` nor `rest_authentication_errors`, and WooCommerce's key/secret auth only covers `wc/*`. If Basic auth yields `rest_not_logged_in`, the host is stripping the `Authorization` header — see README.md for the `.htaccess` fix.
 
-**`POST /shipment` params:** `order_id` (int, required — the order number in admin is the ID), `tracking_number` (required), `carrier` (`auto`|`ups`|`usps`, default `auto`, schema-enforced), `line_item_ids` (int array or comma-separated; required for regular orders; for a fulfillment order pass the *source* orders' item ids from `source_orders[].line_items[]` — never the fulfillment's own ids — and omit only when the box holds every item of every source), `ship_date` (optional `Y-m-d`, stored as midnight). Returns **201** with the service result (`message`, `shipment_id`, `shipment_ids`, `skipped_order_ids`, `failed_order_ids`, `carrier`, `shipments[]` post-poll summaries, `order_statuses{}`), or `{"error","code"}` mapped from the service `WP_Error`: 400 `fst_missing_args` / `fst_no_items` / `fst_nothing_added` / `fst_invalid_ship_date`, 404 `fst_order_not_found`, 409 `fst_duplicate_tracking`, 500 `fst_create_failed`. The messages are the ones the admin meta box shows.
+**`POST /shipment` params:** `order_id` (int, required — the order number in admin is the ID), `tracking_number` (required), `carrier` (`auto`|`ups`|`usps`, default `auto`, schema-enforced), `line_item_ids` (int array or comma-separated; required for regular orders; for a fulfillment order pass the *source* orders' item ids from `source_orders[].line_items[]` — never the fulfillment's own ids — and omit only when the box holds every item of every source), `ship_date` (optional `Y-m-d`, stored as midnight), and the optional box cost fields `label_cost`, `box_weight`, `box_dims`, `label_source` (see "Recording What a Box Cost to Ship"; not schema-typed — the service validates them). Returns **201** with the service result (`message`, `shipment_id`, `shipment_ids`, `skipped_order_ids`, `failed_order_ids`, `carrier`, `shipments[]` post-poll summaries, `order_statuses{}`), or `{"error","code"}` mapped from the service `WP_Error`: 400 `fst_missing_args` / `fst_no_items` / `fst_nothing_added` / `fst_invalid_ship_date` / `fst_invalid_label_cost` / `fst_invalid_box_weight` / `fst_invalid_box_dims`, 404 `fst_order_not_found`, 409 `fst_duplicate_tracking`, 500 `fst_create_failed`. The messages are the ones the admin meta box shows.
 
 ```bash
 curl -s -X POST 'https://fishotel.com/wp-json/fst/v1/shipment' \
@@ -282,9 +338,23 @@ curl -s -X POST 'https://fishotel.com/wp-json/fst/v1/shipment' \
   -d '{"order_id":34183,"tracking_number":"1Z50W72W0115498880","carrier":"ups","line_item_ids":[4711]}'
 
 curl -s 'https://fishotel.com/wp-json/fst/v1/order/34183/shipments' -u 'jeff:abcd efgh ijkl mnop qrst uvwx'
+
+# Tracking + what the box cost, in one call (valid box / source names: GET /shipping-options)
+curl -s -X POST 'https://fishotel.com/wp-json/fst/v1/shipment' \
+  -u 'jeff:abcd efgh ijkl mnop qrst uvwx' \
+  -H 'Content-Type: application/json' \
+  -d '{"order_id":34183,"tracking_number":"1Z50W72W0115498880","carrier":"ups","line_item_ids":[4711],"label_cost":18.40,"box_weight":11,"box_dims":"10x10x10","label_source":"Partner A"}'
+
+# Add or correct the cost later ("" or null clears a field, a missing key is left alone)
+curl -s -X POST 'https://fishotel.com/wp-json/fst/v1/shipment/912/cost' \
+  -u 'jeff:abcd efgh ijkl mnop qrst uvwx' \
+  -H 'Content-Type: application/json' \
+  -d '{"label_cost":"19.25","label_source":"Partner B"}'
 ```
 
-**`GET /order/{id}/shipments`** returns `order` (`id`, `number`, `status`, `is_fulfillment`, `source_order_ids` = where a POST fans out to), `line_items[]` (`id`, `name`, `quantity`, `covered`), `fully_shipped` (null for fulfillments — coverage lives on the sources), `shipments[]` (row columns minus `tracking_data`, with `line_item_ids` decoded, `status_label`, `tracking_url`) and `source_orders[]` (fulfillments only, one per `source_order_ids` entry: `id`, `number`, `status`, `line_items[]` with `covered`, `fully_shipped`, `shipments[]` — all from that source's own rows; these are the ids a POST needs).
+**`POST /shipment/{id}/cost`** takes any of `label_cost`, `box_weight`, `box_dims`, `label_source` and writes to the box (tracking number) of shipment `{id}`. Returns **200** with `message`, `shipment_id`, `tracking_number`, the four fields, `shared_box`, `order_ids[]`; errors as `{"error","code"}`: 404 `fst_shipment_not_found`, 400 `fst_no_cost_fields` / `fst_invalid_label_cost` / `fst_invalid_box_weight` / `fst_invalid_box_dims`. A 409 on `POST /shipment` writes no cost — use this endpoint to add it.
+
+**`GET /order/{id}/shipments`** returns `order` (`id`, `number`, `status`, `is_fulfillment`, `source_order_ids` = where a POST fans out to), `line_items[]` (`id`, `name`, `quantity`, `covered`), `fully_shipped` (null for fulfillments — coverage lives on the sources), `shipments[]` (row columns minus `tracking_data`, with `line_item_ids` decoded, `status_label`, `tracking_url`, and the box's `label_cost`, `box_weight`, `box_dims`, `label_source` + `shared_box`) and `source_orders[]` (fulfillments only, one per `source_order_ids` entry: `id`, `number`, `status`, `line_items[]` with `covered`, `fully_shipped`, `shipments[]` — all from that source's own rows; these are the ids a POST needs).
 
 #### For the label skill: POST the tracking here instead of driving the admin screen
 
@@ -333,6 +403,7 @@ The plugin checks GitHub for new releases every 6 hours (cached). To release a n
 - Analytics exclude "Unknown" and "Label Created" statuses
 - All date filtering uses **ship_date**, not the date records were created
 - Use the date range selector to narrow down the timeframe
+- Label Costs leave out every box without a recorded cost — the "Without a Cost" card says how many. Add the costs on the orders or import them under Settings > Boxes & label costs
 
 ### Plugin update requires two clicks
 - Fixed in v1.5.2. If on an older version, the second click completes the update normally.

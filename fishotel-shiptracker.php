@@ -3,7 +3,7 @@
  * Plugin Name: FisHotel ShipTracker
  * Plugin URI: https://fishotel.com
  * Description: Self-hosted shipment tracking for WooCommerce. Tracks UPS & USPS packages, sends automated email notifications, and provides a branded tracking page for customers.
- * Version: 1.9.16
+ * Version: 1.9.17
  * Author: FisHotel
  * Author URI: https://fishotel.com
  * Text Domain: fishotel-shiptracker
@@ -19,8 +19,8 @@
 defined( 'ABSPATH' ) || exit;
 
 // Plugin constants
-define( 'FST_VERSION', '1.9.16' );
-define( 'FST_DB_VERSION', '1.2.0' );
+define( 'FST_VERSION', '1.9.17' );
+define( 'FST_DB_VERSION', '1.3.0' );
 define( 'FST_PLUGIN_FILE', __FILE__ );
 define( 'FST_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
 define( 'FST_PLUGIN_URL', plugin_dir_url( __FILE__ ) );
@@ -103,6 +103,7 @@ final class FisHotel_ShipTracker {
         require_once FST_PLUGIN_DIR . 'includes/class-fst-activator.php';
         require_once FST_PLUGIN_DIR . 'includes/class-fst-deactivator.php';
         require_once FST_PLUGIN_DIR . 'includes/class-fst-shipment.php';
+        require_once FST_PLUGIN_DIR . 'includes/class-fst-label-cost.php';
         require_once FST_PLUGIN_DIR . 'includes/class-fst-tracker.php';
         require_once FST_PLUGIN_DIR . 'includes/class-fst-order.php';
         require_once FST_PLUGIN_DIR . 'includes/class-fst-settings.php';

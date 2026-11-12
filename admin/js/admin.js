@@ -50,6 +50,37 @@
 			// Auto-detect carrier on tracking number input
 			$(document).on('change', '#fst-tracking-number', $.proxy(this.detectCarrier, this));
 
+			// Label cost: show the custom size box only when "Custom" is picked.
+			$(document).on('change', '.fst-cost-box', function () {
+				$(this).closest('.fst-cost-fields').find('.fst-cost-dims-row').toggle($(this).val() === 'custom');
+			});
+
+			// Label cost: open / close the edit form of an existing shipment.
+			$(document).on('click', '.fst-cost-edit-toggle', function (e) {
+				e.preventDefault();
+				$(this).closest('.fst-shipment-item').find('.fst-cost-form').toggle();
+			});
+
+			// Label cost: save the edit form of an existing shipment.
+			$(document).on('click', '.fst-cost-save-btn', $.proxy(this.saveLabelCost, this));
+
+			// Enter inside a label cost field must not submit the order form.
+			$(document).on('keypress', '.fst-cost-fields input, .fst-cost-fields select', function (e) {
+				if (e.which === 13) {
+					e.preventDefault();
+					var editForm = $(this).closest('.fst-cost-form');
+					if (editForm.length) {
+						editForm.find('.fst-cost-save-btn').trigger('click');
+					} else {
+						$('#fst-add-tracking-btn').trigger('click');
+					}
+				}
+			});
+
+			// Settings: add / remove a row of the standard boxes and label sources lists.
+			$(document).on('click', '.fst-list-add', $.proxy(this.addListRow, this));
+			$(document).on('click', '.fst-list-remove', $.proxy(this.removeListRow, this));
+
 			// Tab switching on settings page
 			$(document).on('click', '.fst-tabs .nav-tab', $.proxy(this.switchTab, this));
 
@@ -125,14 +156,18 @@
 			$.ajax({
 				url: fst_admin.ajax_url,
 				type: 'POST',
-				data: {
-					action: 'fst_add_tracking',
-					nonce: fst_admin.nonce,
-					order_id: orderId,
-					tracking_number: trackingNumber,
-					carrier: carrier,
-					line_item_ids: checkedItems,
-				},
+				// The four optional cost fields ride along; empty ones record nothing.
+				data: $.extend(
+					{
+						action: 'fst_add_tracking',
+						nonce: fst_admin.nonce,
+						order_id: orderId,
+						tracking_number: trackingNumber,
+						carrier: carrier,
+						line_item_ids: checkedItems,
+					},
+					this.readCostFields($('#fst-add-cost-fields'))
+				),
 				success: function (response) {
 					if (response && response.success) {
 						showMessage('success', response.data.message || 'Tracking added.');
@@ -157,6 +192,120 @@
 			});
 
 			return false;
+		},
+
+		/**
+		 * Read the label cost inputs inside a wrapper (the add form or an
+		 * existing shipment's edit form).
+		 */
+		readCostFields: function (wrapper) {
+			var boxSelect = wrapper.find('.fst-cost-box');
+			var dims = (wrapper.find('.fst-cost-dims').val() || '').trim();
+
+			// A standard box is posted as its size; "Custom" uses the text box.
+			if (boxSelect.length && boxSelect.val() !== 'custom') {
+				dims = boxSelect.val() || '';
+			}
+
+			return {
+				label_cost: (wrapper.find('.fst-cost-amount').val() || '').trim(),
+				box_weight: (wrapper.find('.fst-cost-weight').val() || '').trim(),
+				box_dims: dims,
+				label_source: (wrapper.find('.fst-cost-source').val() || '').trim(),
+			};
+		},
+
+		/**
+		 * Save the label cost of an existing shipment's box via AJAX.
+		 * All four fields are sent, so an emptied field is cleared.
+		 */
+		saveLabelCost: function (e) {
+			e.preventDefault();
+			e.stopPropagation();
+
+			var button = $(e.currentTarget);
+			var form = button.closest('.fst-cost-form');
+			var message = form.find('.fst-cost-message');
+
+			button.prop('disabled', true);
+			message.css('color', '').text('Saving...');
+
+			$.ajax({
+				url: fst_admin.ajax_url,
+				type: 'POST',
+				data: $.extend(
+					{
+						action: 'fst_set_label_cost',
+						nonce: fst_admin.nonce,
+						shipment_id: button.data('id'),
+					},
+					this.readCostFields(form)
+				),
+				success: function (response) {
+					if (response && response.success) {
+						message.css('color', '#1e7e34').text(response.data.message || 'Saved.');
+						// Reload to show the saved cost, as after adding tracking.
+						window.location.replace(window.location.href);
+					} else {
+						var errMsg = (response && response.data && response.data.message)
+							? response.data.message
+							: (response && response.data ? response.data : 'Unknown error.');
+						message.css('color', '#dc3545').text(errMsg);
+					}
+				},
+				error: function (xhr) {
+					message.css('color', '#dc3545').text('Request failed (' + (xhr.status || 'network error') + ').');
+				},
+				complete: function () {
+					button.prop('disabled', false);
+				},
+			});
+
+			return false;
+		},
+
+		/**
+		 * Settings: append an empty row to a list table by copying its last row.
+		 */
+		addListRow: function (e) {
+			e.preventDefault();
+
+			var tbody = $($(e.currentTarget).data('target')).find('tbody');
+			var row = tbody.find('.fst-list-row').last().clone();
+
+			// Next free row number — rows may have been removed, so count
+			// from the highest one in use, not from the number of rows.
+			var index = 0;
+			tbody.find('input').each(function () {
+				var match = this.name.match(/\[(\d+)\]/);
+				if (match) {
+					index = Math.max(index, parseInt(match[1], 10) + 1);
+				}
+			});
+
+			row.find('input').each(function () {
+				// fst_standard_boxes[3][name] -> fst_standard_boxes[4][name]
+				this.name = this.name.replace(/\[\d+\]/, '[' + index + ']');
+				this.value = '';
+			});
+
+			tbody.append(row);
+			row.find('input').first().focus();
+		},
+
+		/**
+		 * Settings: remove a list row. The last remaining row is emptied
+		 * instead, so there is always one to type into.
+		 */
+		removeListRow: function (e) {
+			e.preventDefault();
+
+			var row = $(e.currentTarget).closest('.fst-list-row');
+			if (row.siblings('.fst-list-row').length) {
+				row.remove();
+			} else {
+				row.find('input').val('');
+			}
 		},
 
 		/**
@@ -466,15 +615,18 @@
 			e.preventDefault();
 
 			var tab = $(e.currentTarget).attr('href').substring(1);
-			var form = $(e.currentTarget).closest('.wrap').find('form');
+			var wrap = $(e.currentTarget).closest('.wrap');
+			var form = wrap.find('form.fst-settings-form');
 
 			// Update active tab styling
 			$(e.currentTarget).siblings('.nav-tab').removeClass('nav-tab-active');
 			$(e.currentTarget).addClass('nav-tab-active');
 
-			// Show/hide tab content
-			form.find('.fst-tab-content').removeClass('active');
-			form.find('#' + tab).addClass('active');
+			// Show/hide tab content. Some of a tab's content sits outside the
+			// settings form (the label cost import is a form of its own), so
+			// look in the whole page and match on data-fst-tab as well.
+			wrap.find('.fst-tab-content').removeClass('active');
+			wrap.find('#' + tab + ', .fst-tab-content[data-fst-tab="' + tab + '"]').addClass('active');
 
 			// Update hidden field
 			form.find('input[name="fst_tab"]').val(tab);

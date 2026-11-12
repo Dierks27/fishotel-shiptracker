@@ -20,6 +20,115 @@ class FST_Settings {
      */
     public function __construct() {
         add_action( 'admin_init', array( $this, 'handle_form_submission' ) );
+        add_action( 'admin_init', array( $this, 'handle_label_cost_import' ) );
+    }
+
+    /**
+     * The standard boxes saved under Settings → Boxes & label costs.
+     *
+     * Public contract — the theme's Shipments box reads this to offer the
+     * same sizes, and GET /fst/v1/shipping-options returns it. Nothing is
+     * seeded: the list is empty until the owner fills it in.
+     *
+     * @return array[] [ { name, length, width, height, dims } ] — sizes in
+     *                 inches as number strings ("10", "12.5"); `dims` is the
+     *                 normalised "LxWxH" stored on a shipment (box_dims).
+     */
+    public static function get_standard_boxes() {
+        $boxes = array();
+        foreach ( self::sanitize_standard_boxes( get_option( 'fst_standard_boxes', array() ) ) as $box ) {
+            $box['dims'] = $box['length'] . 'x' . $box['width'] . 'x' . $box['height'];
+            $boxes[]     = $box;
+        }
+        return $boxes;
+    }
+
+    /**
+     * The label sources saved under Settings → Boxes & label costs — the
+     * partners labels are bought through.
+     *
+     * Public contract — read by the theme and returned by
+     * GET /fst/v1/shipping-options. Nothing is seeded. A shipment's
+     * label_source may still hold free text that is not on this list.
+     *
+     * @return string[]
+     */
+    public static function get_label_sources() {
+        return self::sanitize_label_sources( get_option( 'fst_label_sources', array() ) );
+    }
+
+    /**
+     * Clean a submitted (or stored) list of standard boxes: a row needs a
+     * name and three sizes above 0; anything else is dropped, as is a second
+     * box with the same name.
+     *
+     * @param mixed $raw [ { name, length, width, height } ]
+     * @return array[] [ { name, length, width, height } ]
+     */
+    public static function sanitize_standard_boxes( $raw ) {
+        $boxes = array();
+        $seen  = array();
+
+        foreach ( (array) $raw as $row ) {
+            if ( ! is_array( $row ) ) {
+                continue;
+            }
+
+            $name = isset( $row['name'] ) && is_scalar( $row['name'] )
+                ? FST_Label_Cost::limit_length( sanitize_text_field( (string) $row['name'] ), 40 )
+                : '';
+            $dims = FST_Label_Cost::parse_dims(
+                array(
+                    isset( $row['length'] ) ? $row['length'] : '',
+                    isset( $row['width'] ) ? $row['width'] : '',
+                    isset( $row['height'] ) ? $row['height'] : '',
+                ),
+                array()
+            );
+
+            $key = FST_Label_Cost::lower( $name );
+            if ( '' === $name || ! is_string( $dims ) || isset( $seen[ $key ] ) ) {
+                continue;
+            }
+            $seen[ $key ] = true;
+
+            list( $length, $width, $height ) = explode( 'x', $dims );
+            $boxes[] = array(
+                'name'   => $name,
+                'length' => $length,
+                'width'  => $width,
+                'height' => $height,
+            );
+        }
+
+        return $boxes;
+    }
+
+    /**
+     * Clean a submitted (or stored) list of label sources: trimmed to 40
+     * characters, blanks and repeats (any letter case) dropped.
+     *
+     * @param mixed $raw
+     * @return string[]
+     */
+    public static function sanitize_label_sources( $raw ) {
+        $sources = array();
+        $seen    = array();
+
+        foreach ( (array) $raw as $source ) {
+            if ( ! is_scalar( $source ) || is_bool( $source ) ) {
+                continue;
+            }
+            $source = FST_Label_Cost::limit_length( sanitize_text_field( (string) $source ), 40 );
+            $key    = FST_Label_Cost::lower( $source );
+            if ( '' === $source || isset( $seen[ $key ] ) ) {
+                continue;
+            }
+            $seen[ $key ] = true;
+            $sources[]    = $source;
+        }
+
+        return $sources;
     }
 
     /**
@@ -59,6 +168,9 @@ class FST_Settings {
             case 'advanced':
                 $this->save_advanced_settings();
                 break;
+            case 'boxes':
+                $this->save_boxes_settings();
+                break;
         }
 
         wp_safe_redirect( admin_url( 'admin.php?page=fst-settings&tab=' . $tab . '&updated=1' ) );
@@ -73,8 +185,9 @@ class FST_Settings {
             wp_die( 'Unauthorized access' );
         }
 
-        $tab     = isset( $_GET['tab'] ) ? sanitize_text_field( $_GET['tab'] ) : 'general';
-        $updated = isset( $_GET['updated'] ) ? sanitize_text_field( $_GET['updated'] ) : '';
+        $tab      = isset( $_GET['tab'] ) ? sanitize_text_field( $_GET['tab'] ) : 'general';
+        $updated  = isset( $_GET['updated'] ) ? sanitize_text_field( $_GET['updated'] ) : '';
+        $imported = isset( $_GET['imported'] ) ? sanitize_text_field( $_GET['imported'] ) : '';
 
         ?>
         <div class="wrap fst-settings-wrap">
@@ -104,6 +217,9 @@ class FST_Settings {
                 </a>
                 <a href="#advanced" class="nav-tab <?php echo 'advanced' === $tab ? 'nav-tab-active' : ''; ?>">
                     <?php esc_html_e( 'Advanced', 'fishotel-shiptracker' ); ?>
+                </a>
+                <a href="#boxes" class="nav-tab <?php echo 'boxes' === $tab ? 'nav-tab-active' : ''; ?>">
+                    <?php esc_html_e( 'Boxes & label costs', 'fishotel-shiptracker' ); ?>
                 </a>
                 <a href="#migration" class="nav-tab <?php echo 'migration' === $tab ? 'nav-tab-active' : ''; ?>">
                     <?php esc_html_e( 'Migration', 'fishotel-shiptracker' ); ?>
@@ -138,10 +254,19 @@ class FST_Settings {
                     <?php $this->render_advanced_tab(); ?>
                 </div>
 
+                <div id="boxes" class="fst-tab-content <?php echo 'boxes' === $tab ? 'active' : ''; ?>">
+                    <?php $this->render_boxes_tab(); ?>
+                </div>
+
                 <?php if ( 'migration' !== $tab ) : ?>
                     <?php submit_button(); ?>
                 <?php endif; ?>
             </form>
+
+            <?php // The import posts a file, so it is its own form below the settings form (same tab). ?>
+            <div class="fst-tab-content <?php echo 'boxes' === $tab ? 'active' : ''; ?>" data-fst-tab="boxes">
+                <?php $this->render_label_cost_import( $imported ); ?>
+            </div>
 
             <div id="migration" class="fst-tab-content <?php echo 'migration' === $tab ? 'active' : ''; ?>">
                 <?php include FST_PLUGIN_DIR . 'admin/views/migration.php'; ?>
@@ -591,6 +716,372 @@ class FST_Settings {
             </tr>
         </table>
         <?php
+    }
+
+    /**
+     * Render the Boxes & label costs tab: the standard boxes and the label
+     * sources. Both lists start empty — nothing is seeded.
+     */
+    private function render_boxes_tab() {
+        $boxes   = self::get_standard_boxes();
+        $sources = self::get_label_sources();
+
+        // Always end with one blank row to type into.
+        $boxes[]   = array( 'name' => '', 'length' => '', 'width' => '', 'height' => '' );
+        $sources[] = '';
+
+        ?>
+        <h3><?php esc_html_e( 'Standard Boxes', 'fishotel-shiptracker' ); ?></h3>
+        <p class="description" style="max-width: 640px;">
+            <?php esc_html_e( 'The boxes you usually ship in, in inches. They are offered as a dropdown wherever a label cost is entered; a custom size can always be typed instead. A row needs a name and all three sizes to be saved.', 'fishotel-shiptracker' ); ?>
+        </p>
+        <table class="widefat striped fst-list-table" id="fst-standard-boxes" style="max-width: 640px; margin-top: 12px;">
+            <thead>
+                <tr>
+                    <th><?php esc_html_e( 'Name', 'fishotel-shiptracker' ); ?></th>
+                    <th><?php esc_html_e( 'Length (in)', 'fishotel-shiptracker' ); ?></th>
+                    <th><?php esc_html_e( 'Width (in)', 'fishotel-shiptracker' ); ?></th>
+                    <th><?php esc_html_e( 'Height (in)', 'fishotel-shiptracker' ); ?></th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody>
+                <?php foreach ( $boxes as $index => $box ) : ?>
+                    <tr class="fst-list-row">
+                        <td>
+                            <input type="text" name="fst_standard_boxes[<?php echo esc_attr( $index ); ?>][name]" value="<?php echo esc_attr( $box['name'] ); ?>" maxlength="40" style="width: 100%;">
+                        </td>
+                        <?php foreach ( array( 'length', 'width', 'height' ) as $side ) : ?>
+                            <td>
+                                <input type="number" name="fst_standard_boxes[<?php echo esc_attr( $index ); ?>][<?php echo esc_attr( $side ); ?>]" value="<?php echo esc_attr( $box[ $side ] ); ?>" min="0" step="0.01" style="width: 90px;">
+                            </td>
+                        <?php endforeach; ?>
+                        <td>
+                            <a href="#" class="fst-list-remove" title="<?php esc_attr_e( 'Remove this box', 'fishotel-shiptracker' ); ?>">&times; <?php esc_html_e( 'Remove', 'fishotel-shiptracker' ); ?></a>
+                        </td>
+                    </tr>
+                <?php endforeach; ?>
+            </tbody>
+        </table>
+        <p>
+            <button type="button" class="button fst-list-add" data-target="#fst-standard-boxes"><?php esc_html_e( 'Add another box', 'fishotel-shiptracker' ); ?></button>
+        </p>
+
+        <h3 style="margin-top: 30px;"><?php esc_html_e( 'Label Sources', 'fishotel-shiptracker' ); ?></h3>
+        <p class="description" style="max-width: 640px;">
+            <?php esc_html_e( 'Where you buy labels — one name per partner. The Analytics page compares their average cost per box size, so you can see who is cheaper for each box.', 'fishotel-shiptracker' ); ?>
+        </p>
+        <table class="widefat striped fst-list-table" id="fst-label-sources" style="max-width: 420px; margin-top: 12px;">
+            <thead>
+                <tr>
+                    <th><?php esc_html_e( 'Name', 'fishotel-shiptracker' ); ?></th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody>
+                <?php foreach ( $sources as $source ) : ?>
+                    <tr class="fst-list-row">
+                        <td>
+                            <input type="text" name="fst_label_sources[]" value="<?php echo esc_attr( $source ); ?>" maxlength="40" style="width: 100%;">
+                        </td>
+                        <td>
+                            <a href="#" class="fst-list-remove" title="<?php esc_attr_e( 'Remove this source', 'fishotel-shiptracker' ); ?>">&times; <?php esc_html_e( 'Remove', 'fishotel-shiptracker' ); ?></a>
+                        </td>
+                    </tr>
+                <?php endforeach; ?>
+            </tbody>
+        </table>
+        <p>
+            <button type="button" class="button fst-list-add" data-target="#fst-label-sources"><?php esc_html_e( 'Add another source', 'fishotel-shiptracker' ); ?></button>
+        </p>
+        <?php
+    }
+
+    /**
+     * Render the "Import label costs" tool (its own form, below the
+     * settings form on the Boxes & label costs tab) and the report of the
+     * import that just ran.
+     *
+     * @param string $imported '1' right after an import.
+     */
+    private function render_label_cost_import( $imported ) {
+        $sources = self::get_label_sources();
+        $result  = false;
+        if ( $imported ) {
+            // Shown once: the report is dropped as soon as it has been read.
+            $result = get_transient( 'fst_cost_import_' . get_current_user_id() );
+            delete_transient( 'fst_cost_import_' . get_current_user_id() );
+        }
+
+        ?>
+        <div style="border-top: 2px solid #f0f0f0; margin-top: 30px; padding-top: 10px; max-width: 800px;">
+            <h3><?php esc_html_e( 'Import label costs', 'fishotel-shiptracker' ); ?></h3>
+
+            <?php if ( is_array( $result ) ) : ?>
+                <?php $this->render_label_cost_import_result( $result ); ?>
+            <?php endif; ?>
+
+            <p class="description">
+                <?php esc_html_e( 'Record what labels cost from a spreadsheet export. The file needs a header row with a tracking column (tracking, tracking number, tracking #) and a cost column (cost, amount, total, charge, price). Weight, dimensions / box and source columns are used when present. Only tracking numbers that already exist in ShipTracker are updated, and only these four fields are ever changed.', 'fishotel-shiptracker' ); ?>
+            </p>
+
+            <form method="post" enctype="multipart/form-data" autocomplete="off">
+                <?php wp_nonce_field( 'fst_import_label_costs', 'fst_import_costs_nonce' ); ?>
+                <table class="form-table">
+                    <tr>
+                        <th scope="row">
+                            <label for="fst_cost_csv_file"><?php esc_html_e( 'CSV file', 'fishotel-shiptracker' ); ?></label>
+                        </th>
+                        <td>
+                            <input type="file" id="fst_cost_csv_file" name="fst_cost_csv_file" accept=".csv,.txt,text/csv,text/plain">
+                            <p class="description"><?php esc_html_e( 'Up to 2 MB.', 'fishotel-shiptracker' ); ?></p>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th scope="row">
+                            <label for="fst_cost_csv_text"><?php esc_html_e( 'Or paste the rows', 'fishotel-shiptracker' ); ?></label>
+                        </th>
+                        <td>
+                            <textarea id="fst_cost_csv_text" name="fst_cost_csv_text" rows="6" class="large-text code" placeholder="<?php echo esc_attr( "Tracking #,Cost\n1Z999AA10123456784,18.40" ); ?>"></textarea>
+                            <p class="description"><?php esc_html_e( 'Include the header row. Cells copied straight from a spreadsheet work too.', 'fishotel-shiptracker' ); ?></p>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th scope="row">
+                            <label for="fst_cost_csv_source"><?php esc_html_e( 'These labels were bought through', 'fishotel-shiptracker' ); ?></label>
+                        </th>
+                        <td>
+                            <?php if ( ! empty( $sources ) ) : ?>
+                                <select id="fst_cost_csv_source" name="fst_cost_csv_source">
+                                    <option value=""><?php esc_html_e( '— Not recorded —', 'fishotel-shiptracker' ); ?></option>
+                                    <?php foreach ( $sources as $source ) : ?>
+                                        <option value="<?php echo esc_attr( $source ); ?>"><?php echo esc_html( $source ); ?></option>
+                                    <?php endforeach; ?>
+                                </select>
+                            <?php else : ?>
+                                <input type="text" id="fst_cost_csv_source" name="fst_cost_csv_source" maxlength="40" class="regular-text">
+                            <?php endif; ?>
+                            <p class="description"><?php esc_html_e( 'Used for the whole file when it has no source column.', 'fishotel-shiptracker' ); ?></p>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th scope="row"><?php esc_html_e( 'Overwrite', 'fishotel-shiptracker' ); ?></th>
+                        <td>
+                            <label for="fst_cost_csv_overwrite">
+                                <input type="checkbox" id="fst_cost_csv_overwrite" name="fst_cost_csv_overwrite" value="1">
+                                <?php esc_html_e( 'Replace costs that are already recorded', 'fishotel-shiptracker' ); ?>
+                            </label>
+                            <p class="description"><?php esc_html_e( 'Left unticked, a box that already has a cost keeps it and only its empty fields are filled in.', 'fishotel-shiptracker' ); ?></p>
+                        </td>
+                    </tr>
+                </table>
+                <?php submit_button( __( 'Import label costs', 'fishotel-shiptracker' ), 'secondary', 'fst_import_costs_submit' ); ?>
+            </form>
+        </div>
+        <?php
+    }
+
+    /**
+     * Render the outcome of a label cost import.
+     *
+     * @param array $result FST_Label_Cost::import() result.
+     */
+    private function render_label_cost_import_result( array $result ) {
+        if ( ! empty( $result['error'] ) ) {
+            ?>
+            <div class="notice notice-error inline"><p><?php echo esc_html( $result['error'] ); ?></p></div>
+            <?php
+            return;
+        }
+
+        $labels  = array(
+            'tracking' => __( 'tracking', 'fishotel-shiptracker' ),
+            'cost'     => __( 'cost', 'fishotel-shiptracker' ),
+            'weight'   => __( 'weight', 'fishotel-shiptracker' ),
+            'dims'     => __( 'box size', 'fishotel-shiptracker' ),
+            'source'   => __( 'source', 'fishotel-shiptracker' ),
+        );
+        $columns = array();
+        foreach ( $labels as $field => $label ) {
+            if ( ! empty( $result['columns'][ $field ] ) ) {
+                $columns[] = $label . ' = "' . $result['columns'][ $field ] . '"';
+            }
+        }
+
+        ?>
+        <div class="notice notice-success inline">
+            <p>
+                <strong><?php esc_html_e( 'Import finished.', 'fishotel-shiptracker' ); ?></strong>
+                <?php
+                printf(
+                    /* translators: 1: rows read, 2: matched, 3: already had a cost, 4: not found, 5: invalid */
+                    esc_html__( '%1$d rows read: %2$d matched and saved, %3$d already had a cost, %4$d not found, %5$d invalid.', 'fishotel-shiptracker' ),
+                    (int) $result['rows'],
+                    (int) $result['matched'],
+                    (int) $result['had_cost'],
+                    (int) $result['not_found'],
+                    (int) $result['invalid']
+                );
+                ?>
+            </p>
+            <p style="color: #666;">
+                <?php
+                printf(
+                    /* translators: %s: list of columns used */
+                    esc_html__( 'Columns used: %s.', 'fishotel-shiptracker' ),
+                    esc_html( implode( ', ', $columns ) )
+                );
+                if ( ! empty( $result['details_filled'] ) ) {
+                    echo ' ';
+                    printf(
+                        /* translators: %d: number of boxes */
+                        esc_html__( '%d of the boxes that already had a cost had an empty weight, size or source filled in.', 'fishotel-shiptracker' ),
+                        (int) $result['details_filled']
+                    );
+                }
+                if ( ! empty( $result['repeated'] ) ) {
+                    echo ' ';
+                    printf(
+                        /* translators: %d: number of rows */
+                        esc_html__( '%d repeated rows (same tracking number and cost) were skipped.', 'fishotel-shiptracker' ),
+                        (int) $result['repeated']
+                    );
+                }
+                if ( ! empty( $result['ignored_optional'] ) ) {
+                    echo ' ';
+                    printf(
+                        /* translators: %d: number of rows */
+                        esc_html__( '%d rows had a weight or box size that could not be read; their cost was still used.', 'fishotel-shiptracker' ),
+                        (int) $result['ignored_optional']
+                    );
+                }
+                ?>
+            </p>
+        </div>
+
+        <?php if ( ! empty( $result['invalid_list'] ) ) : ?>
+            <h4><?php esc_html_e( 'Invalid rows (nothing was saved for these)', 'fishotel-shiptracker' ); ?></h4>
+            <table class="widefat striped" style="max-width: 800px;">
+                <thead>
+                    <tr>
+                        <th style="width: 60px;"><?php esc_html_e( 'Row', 'fishotel-shiptracker' ); ?></th>
+                        <th><?php esc_html_e( 'Tracking #', 'fishotel-shiptracker' ); ?></th>
+                        <th><?php esc_html_e( 'Why', 'fishotel-shiptracker' ); ?></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <?php foreach ( $result['invalid_list'] as $row ) : ?>
+                        <tr>
+                            <td><?php echo esc_html( $row['row'] ); ?></td>
+                            <td><code><?php echo esc_html( $row['tracking_number'] ); ?></code></td>
+                            <td><?php echo esc_html( $row['reason'] ); ?></td>
+                        </tr>
+                    <?php endforeach; ?>
+                </tbody>
+            </table>
+        <?php endif; ?>
+
+        <?php if ( ! empty( $result['not_found_list'] ) ) : ?>
+            <h4><?php esc_html_e( 'Not found (no shipment has this tracking number)', 'fishotel-shiptracker' ); ?></h4>
+            <table class="widefat striped" style="max-width: 800px;">
+                <thead>
+                    <tr>
+                        <th style="width: 60px;"><?php esc_html_e( 'Row', 'fishotel-shiptracker' ); ?></th>
+                        <th><?php esc_html_e( 'Tracking #', 'fishotel-shiptracker' ); ?></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <?php foreach ( $result['not_found_list'] as $row ) : ?>
+                        <tr>
+                            <td><?php echo esc_html( $row['row'] ); ?></td>
+                            <td><code><?php echo esc_html( $row['tracking_number'] ); ?></code></td>
+                        </tr>
+                    <?php endforeach; ?>
+                </tbody>
+            </table>
+        <?php endif; ?>
+        <?php
+    }
+
+    /**
+     * Handle the "Import label costs" form: nonce, capability, the 2 MB
+     * limit (checked before the file is read), then FST_Label_Cost::import().
+     * The outcome is kept for the redirect in a short-lived transient.
+     */
+    public function handle_label_cost_import() {
+        if ( ! isset( $_POST['fst_import_costs_nonce'] ) ) {
+            return;
+        }
+
+        if ( ! wp_verify_nonce( sanitize_text_field( wp_unslash( $_POST['fst_import_costs_nonce'] ) ), 'fst_import_label_costs' ) ) {
+            wp_die( 'Security check failed' );
+        }
+
+        if ( ! current_user_can( 'manage_woocommerce' ) ) {
+            wp_die( 'Unauthorized access' );
+        }
+
+        $limit    = FST_Label_Cost::MAX_IMPORT_BYTES;
+        $too_big  = __( 'That is more than 2 MB. Split the file and import it in parts.', 'fishotel-shiptracker' );
+        $text     = null;
+        $error    = '';
+        $file     = isset( $_FILES['fst_cost_csv_file'] ) && is_array( $_FILES['fst_cost_csv_file'] ) ? $_FILES['fst_cost_csv_file'] : null;
+        $uploaded = $file && isset( $file['error'] ) && UPLOAD_ERR_NO_FILE !== (int) $file['error'];
+
+        if ( $uploaded ) {
+            $tmp_name = isset( $file['tmp_name'] ) ? (string) $file['tmp_name'] : '';
+
+            if ( in_array( (int) $file['error'], array( UPLOAD_ERR_INI_SIZE, UPLOAD_ERR_FORM_SIZE ), true ) ) {
+                $error = $too_big;
+            } elseif ( UPLOAD_ERR_OK !== (int) $file['error'] || ! is_uploaded_file( $tmp_name ) ) {
+                $error = __( 'The file could not be uploaded. Please try again.', 'fishotel-shiptracker' );
+            } elseif ( (int) $file['size'] > $limit || filesize( $tmp_name ) > $limit ) {
+                // Size is checked on disk before a single byte is read.
+                $error = $too_big;
+            } else {
+                $text = file_get_contents( $tmp_name ); // phpcs:ignore WordPress.WP.AlternativeFunctions -- local upload, size-checked above.
+                if ( false === $text ) {
+                    $error = __( 'The file could not be read. Please try again.', 'fishotel-shiptracker' );
+                }
+            }
+        } else {
+            // Raw on purpose: every cell is validated / sanitised by the parser.
+            $pasted = isset( $_POST['fst_cost_csv_text'] ) && is_string( $_POST['fst_cost_csv_text'] ) ? wp_unslash( $_POST['fst_cost_csv_text'] ) : ''; // phpcs:ignore WordPress.Security.ValidatedSanitizedInput
+            if ( strlen( $pasted ) > $limit ) {
+                $error = $too_big;
+            } elseif ( '' === trim( $pasted ) ) {
+                $error = __( 'Choose a CSV file or paste the rows first.', 'fishotel-shiptracker' );
+            } else {
+                $text = $pasted;
+            }
+        }
+
+        if ( '' !== $error ) {
+            $result = array( 'error' => $error );
+        } else {
+            $source    = isset( $_POST['fst_cost_csv_source'] ) && is_string( $_POST['fst_cost_csv_source'] ) ? sanitize_text_field( wp_unslash( $_POST['fst_cost_csv_source'] ) ) : '';
+            $overwrite = ! empty( $_POST['fst_cost_csv_overwrite'] );
+
+            $result = FST_Label_Cost::import( $text, $source, $overwrite );
+        }
+
+        set_transient( 'fst_cost_import_' . get_current_user_id(), $result, 5 * MINUTE_IN_SECONDS );
+
+        wp_safe_redirect( admin_url( 'admin.php?page=fst-settings&tab=boxes&imported=1' ) );
+        exit;
+    }
+
+    /**
+     * Save the standard boxes and label sources.
+     */
+    private function save_boxes_settings() {
+        // phpcs:disable WordPress.Security.ValidatedSanitizedInput -- sanitised row by row in the sanitize_* helpers.
+        $boxes   = isset( $_POST['fst_standard_boxes'] ) && is_array( $_POST['fst_standard_boxes'] ) ? wp_unslash( $_POST['fst_standard_boxes'] ) : array();
+        $sources = isset( $_POST['fst_label_sources'] ) && is_array( $_POST['fst_label_sources'] ) ? wp_unslash( $_POST['fst_label_sources'] ) : array();
+        // phpcs:enable
+
+        update_option( 'fst_standard_boxes', self::sanitize_standard_boxes( $boxes ) );
+        update_option( 'fst_label_sources', self::sanitize_label_sources( $sources ) );
     }
 
     /**

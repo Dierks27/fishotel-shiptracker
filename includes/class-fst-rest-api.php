@@ -55,7 +55,37 @@ class FST_REST_API {
                     'description' => 'Optional ship date, Y-m-d. Defaults to now.',
                     'type'        => 'string',
                 ),
+                // What the box cost to ship. No `type` on purpose: the service
+                // validates these (so "$18.40" or 18.4 both work, and AJAX and
+                // REST answer with the same fst_invalid_* codes).
+                'label_cost'      => array(
+                    'description' => 'Optional. What the label cost, 0 or more (18.40). Stored once per tracking number.',
+                ),
+                'box_weight'      => array(
+                    'description' => 'Optional. Box weight in pounds, above 0.',
+                ),
+                'box_dims'        => array(
+                    'description' => 'Optional. Box size in inches as LxWxH (10x10x10) or the name of a standard box from GET /shipping-options.',
+                ),
+                'label_source'    => array(
+                    'description' => 'Optional. Where the label was bought — a name from GET /shipping-options, or free text (40 characters).',
+                ),
             ),
+        ) );
+
+        // Record or change what a box cost to ship (admin). Acts on the box
+        // (tracking number) of the shipment.
+        register_rest_route( $this->namespace, '/shipment/(?P<id>\d+)/cost', array(
+            'methods'             => WP_REST_Server::CREATABLE,
+            'callback'            => array( $this, 'set_shipment_cost' ),
+            'permission_callback' => array( $this, 'admin_check' ),
+        ) );
+
+        // Standard boxes + label sources a caller may pick from (admin).
+        register_rest_route( $this->namespace, '/shipping-options', array(
+            'methods'             => WP_REST_Server::READABLE,
+            'callback'            => array( $this, 'get_shipping_options' ),
+            'permission_callback' => array( $this, 'admin_check' ),
         ) );
 
         // Effective shipments + line-item coverage for an order (admin).
@@ -132,8 +162,10 @@ class FST_REST_API {
     private function error_response( WP_Error $error ) {
         $status_by_code = array(
             'fst_order_not_found'    => 404,
+            'fst_shipment_not_found' => 404,
             'fst_duplicate_tracking' => 409,
             'fst_create_failed'      => 500,
+            'fst_cost_save_failed'   => 500,
         );
 
         $code   = (string) $error->get_error_code();
@@ -147,6 +179,10 @@ class FST_REST_API {
 
     /**
      * GET /shipment/{id}
+     *
+     * The four cost fields on `shipment` are the BOX's values (read by
+     * tracking number — this row may hold NULL when a sibling row carries
+     * them), and `shared_box` says whether other orders are in the same box.
      */
     public function get_shipment( $request ) {
         $shipment = FST_Shipment::get( absint( $request['id'] ) );
@@ -154,6 +190,12 @@ class FST_REST_API {
         if ( ! $shipment ) {
             return new WP_REST_Response( array( 'error' => 'Shipment not found' ), 404 );
         }
+
+        $box = FST_Shipment::get_box_cost( $shipment->tracking_number );
+        foreach ( FST_Label_Cost::FIELDS as $field ) {
+            $shipment->$field = $box ? $box[ $field ] : null;
+        }
+        $shipment->shared_box = $box ? $box['shared_box'] : false;
 
         $events = FST_Shipment::get_events( $shipment->id );
 
@@ -182,7 +224,7 @@ class FST_REST_API {
         }
 
         $args = array( 'order_id' => $order_id );
-        foreach ( array( 'tracking_number', 'carrier', 'line_item_ids', 'ship_date' ) as $field ) {
+        foreach ( array( 'tracking_number', 'carrier', 'line_item_ids', 'ship_date', 'label_cost', 'box_weight', 'box_dims', 'label_source' ) as $field ) {
             $value = $request->get_param( $field );
             if ( null !== $value ) {
                 $args[ $field ] = $value;
@@ -196,6 +238,45 @@ class FST_REST_API {
         }
 
         return new WP_REST_Response( $result, 201 );
+    }
+
+    /**
+     * POST /shipment/{id}/cost
+     *
+     * Body: any of label_cost, box_weight, box_dims, label_source. A key
+     * sent with an empty value (or JSON null) clears that field; a key that
+     * is not sent is left as it is. Delegates to FST_Order::set_label_cost(),
+     * which writes to the box of the shipment's tracking number.
+     */
+    public function set_shipment_cost( $request ) {
+        $args = array();
+        foreach ( FST_Label_Cost::FIELDS as $field ) {
+            // has_param(), not get_param(): an explicit null must count as sent.
+            if ( $request->has_param( $field ) ) {
+                $args[ $field ] = $request->get_param( $field );
+            }
+        }
+
+        $result = $this->order_service()->set_label_cost( absint( $request['id'] ), $args );
+
+        if ( is_wp_error( $result ) ) {
+            return $this->error_response( $result );
+        }
+
+        return new WP_REST_Response( $result, 200 );
+    }
+
+    /**
+     * GET /shipping-options
+     *
+     * The standard boxes and label sources saved under Settings → Boxes &
+     * label costs, so a script can send values the reports will group.
+     */
+    public function get_shipping_options() {
+        return new WP_REST_Response( array(
+            'standard_boxes' => FST_Settings::get_standard_boxes(),
+            'label_sources'  => FST_Settings::get_label_sources(),
+        ), 200 );
     }
 
     /**
