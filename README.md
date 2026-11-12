@@ -58,6 +58,8 @@ The **Boxes & label costs** settings tab holds two lists. Both start empty — f
 
 When tracking is added to an order you can also enter what the label cost, the box, its weight and where the label was bought. All four are optional and can be added or corrected later on the shipment. A tracking number is one physical box: when one box holds several orders its cost is stored once, so it is never counted twice.
 
+They are stored on `wp_fst_shipments` (database version 1.3.0, added automatically on update): `label_cost DECIMAL(10,2)`, `box_weight DECIMAL(6,2)` (pounds), `box_dims VARCHAR(40)` (`LxWxH` in inches, e.g. `10x10x10`) and `label_source VARCHAR(40)`. All four are `NULL` until recorded — an unrecorded cost is never treated as 0.
+
 #### Import label costs
 
 On the same tab, **Import label costs** records costs in bulk from a spreadsheet export:
