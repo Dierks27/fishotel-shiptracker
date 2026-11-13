@@ -389,7 +389,8 @@ fishotel-shiptracker/
     ├── supplies-stock-test.php      # Price each from the latest purchase, on hand across purchases / usage / recount / a removed box, reorder notice
     ├── supplies-defaults-test.php   # Supplies list, defaults per box (standard, custom, fish count, weather), snapshots, suggestions, validation
     ├── supplies-report-test.php     # Label + materials split adding up, free shipping, local pickups, supplies report
-    └── ship-mode-test.php           # Ship mode rules, the service (order meta only), shared-cost maths for "went in another box"
+    ├── ship-mode-test.php           # Ship mode rules, the service (order meta only), shared-cost maths for "went in another box"
+    └── hook-callbacks-test.php      # Static scan: every add_action / add_filter / menu callback names a method or function that exists
 ```
 
 ### REST API Endpoints

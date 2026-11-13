@@ -479,7 +479,8 @@ fishotel-shiptracker/
     ├── supplies-stock-test.php     # Price each, purchases, stock on hand, recounts, a removed box
     ├── supplies-defaults-test.php  # What a box starts with, snapshots, suggestions, validation
     ├── supplies-report-test.php    # Label + materials split, free shipping, local pickups, supplies report
-    └── ship-mode-test.php          # Local pickup / another order's box: rules and shared-cost maths
+    ├── ship-mode-test.php          # Local pickup / another order's box: rules and shared-cost maths
+    └── hook-callbacks-test.php     # Every hook callback names a method or function that exists
 ```
 
 ### Tests
@@ -501,6 +502,9 @@ for t in tests/*-test.php; do php "$t" || break; done
 | `supplies-defaults-test.php` | The supplies list, the defaults of a box (standard, custom, fish count, each weather action, no weather data), snapshots unaffected by later prices or settings, the suggested foam and paper cost, input validation |
 | `supplies-report-test.php` | The label + materials split adding up to the totals (overall, by size, by source), boxes without a label cost, the free shipping and local pickup lines, the supplies report and the foam / paper ballparks |
 | `ship-mode-test.php` | The rules of a local pickup and of an order that went in another order's box, the service (order meta only), and that box's shared-cost maths |
+| `hook-callbacks-test.php` | A static scan (no plugin code is run): every `add_action` / `add_filter` / `register_*_hook` callback and every `array( $this, 'x' )` literal names a method or function the plugin defines, so a typo fails here instead of on the live site the moment the hook fires. A self-check proves the scanner still reports each kind of broken callback |
+
+GitHub Actions (`.github/workflows/lint.yml`) runs `php -l` on every PHP file under PHP 7.4 and 8.3 and all of the tests under 8.3, on every push to `main` and every pull request.
 
 ## License
 
