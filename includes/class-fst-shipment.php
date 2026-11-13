@@ -2,6 +2,12 @@
 /**
  * Shipment data model — CRUD operations for the wp_fst_shipments table.
  *
+ * Label cost columns (DB version 1.3.0): label_cost, box_weight, box_dims and
+ * label_source describe the BOX, not the row — read and write them through
+ * get_box_cost() / set_box_cost(), never through the row itself. A box's
+ * materials (DB version 1.4.0) are not on this table at all: they are keyed
+ * by tracking number in wp_fst_supply_usage — see FST_Supplies.
+ *
  * @package FisHotel_ShipTracker
  */
 
@@ -237,10 +243,339 @@ class FST_Shipment {
     public static function delete( $id ) {
         global $wpdb;
 
+        // One box, one cost: keep the row in hand so its cost data can move
+        // to a surviving row of the same tracking number once it is gone.
+        $removed = self::get( $id );
+
         // Delete events first.
         $wpdb->delete( self::events_table(), array( 'shipment_id' => $id ), array( '%d' ) );
 
-        return false !== $wpdb->delete( self::table(), array( 'id' => $id ), array( '%d' ) );
+        $deleted = false !== $wpdb->delete( self::table(), array( 'id' => $id ), array( '%d' ) );
+
+        if ( $deleted && $removed ) {
+            self::rehome_box_cost( $removed );
+
+            // The last row of a tracking number: the box itself is gone,
+            // so its materials go back on the shelf. While another order's
+            // row remains the box still exists and keeps them.
+            if ( ! self::get_all_by_tracking( $removed->tracking_number ) ) {
+                FST_Supplies::clear_box_materials( $removed->tracking_number );
+            }
+        }
+
+        return $deleted;
+    }
+
+    /**
+     * The cost data of a box: label cost, weight, dimensions and where the
+     * label was bought, for one tracking number.
+     *
+     * A tracking number is one physical box. Fan-out writes one row per
+     * source order for it, but the four cost columns are filled on ONE of
+     * those rows only (the others stay NULL), so the box is read here by
+     * tracking number and no sum can count it twice.
+     *
+     * @param string $tracking_number
+     * @return array|null FST_Label_Cost::box_from_rows() shape — tracking_number,
+     *                    label_cost, box_weight, box_dims, label_source (decimal
+     *                    strings; NULL = not recorded), shared_box, order_ids,
+     *                    shipment_ids, cost_shipment_id — or null when no
+     *                    shipment has that tracking number.
+     */
+    public static function get_box_cost( $tracking_number ) {
+        $rows = self::get_all_by_tracking( $tracking_number );
+        if ( empty( $rows ) ) {
+            return null;
+        }
+        return FST_Label_Cost::box_from_rows( $rows );
+    }
+
+    /**
+     * Set cost fields on the box of a tracking number.
+     *
+     * Only the keys present in $fields change; a NULL value clears that
+     * field. The box's four fields end up on exactly one row: the row that
+     * already holds them, else $preferred_id (the first row a fan-out call
+     * created), else the oldest row. Every other row of the tracking number
+     * is NULLed.
+     *
+     * `updated_at` is deliberately left as it was — a label cost is
+     * bookkeeping, not a tracking update, and "Recently Delivered" sorts on
+     * that column.
+     *
+     * @param string $tracking_number
+     * @param array  $fields       Any of label_cost, box_weight, box_dims, label_source
+     *                             => normalised value (FST_Label_Cost::normalize_fields()) or null.
+     * @param int    $preferred_id Row to hold the fields when no row holds any yet.
+     * @return bool False when the tracking number has no shipment or no field was given.
+     */
+    public static function set_box_cost( $tracking_number, array $fields, $preferred_id = 0 ) {
+        $fields = array_intersect_key( $fields, array_flip( FST_Label_Cost::FIELDS ) );
+        $rows   = self::get_all_by_tracking( $tracking_number );
+        if ( empty( $rows ) || empty( $fields ) ) {
+            return false;
+        }
+
+        $box    = FST_Label_Cost::box_from_rows( $rows );
+        $values = array();
+        foreach ( FST_Label_Cost::FIELDS as $field ) {
+            $values[ $field ] = array_key_exists( $field, $fields ) ? $fields[ $field ] : $box[ $field ];
+        }
+
+        $holder_id = $box['cost_shipment_id'];
+        if ( ! $holder_id ) {
+            $holder_id = in_array( (int) $preferred_id, $box['shipment_ids'], true ) ? (int) $preferred_id : $box['shipment_ids'][0];
+        }
+
+        $empty = array_fill_keys( FST_Label_Cost::FIELDS, null );
+        $ok    = true;
+        foreach ( $rows as $row ) {
+            $ok = self::write_cost_columns( $row, (int) $row->id === $holder_id ? $values : $empty ) && $ok;
+        }
+
+        return $ok;
+    }
+
+    /**
+     * Remove every cost field from the box of a tracking number.
+     *
+     * @param string $tracking_number
+     * @return bool
+     */
+    public static function clear_box_cost( $tracking_number ) {
+        return self::set_box_cost( $tracking_number, array_fill_keys( FST_Label_Cost::FIELDS, null ) );
+    }
+
+    /**
+     * The boxes of an order (or of several orders — pass a fulfillment's
+     * source order ids to get the boxes they went out in), oldest first.
+     *
+     * One entry per distinct tracking number, with the box's cost data and
+     * whether the box is shared with other orders.
+     *
+     * @param int|int[] $order_ids
+     * @return array[] Each: the get_box_cost() keys plus `shipment_id` (the
+     *                 row of the given order(s) for that box — pass it to
+     *                 fst_set_label_cost), `carrier`, `status`, `ship_date`,
+     *                 and since 1.9.18 `materials` (FST_Supplies record, null
+     *                 when none are recorded), `materials_total` ("4.21" or
+     *                 null) and `total_cost` (label + materials; null while
+     *                 the label cost is not recorded).
+     */
+    public static function get_order_boxes( $order_ids ) {
+        $order_ids = array_values( array_unique( array_filter( array_map( 'absint', (array) $order_ids ) ) ) );
+
+        $boxes = array();
+        foreach ( $order_ids as $order_id ) {
+            foreach ( self::get_by_order( $order_id ) as $row ) {
+                $key = FST_Label_Cost::box_key( $row->tracking_number );
+                if ( isset( $boxes[ $key ] ) && $boxes[ $key ]['shipment_id'] < (int) $row->id ) {
+                    continue;
+                }
+
+                $box = self::get_box_cost( $row->tracking_number );
+                if ( null === $box ) {
+                    continue;
+                }
+                $box['shipment_id'] = (int) $row->id;
+                $box['carrier']     = $row->carrier;
+                $box['status']      = $row->status;
+                $box['ship_date']   = isset( $row->ship_date ) ? $row->ship_date : null;
+
+                $boxes[ $key ] = self::with_materials( $box );
+            }
+        }
+
+        $boxes = array_values( $boxes );
+        usort( $boxes, array( __CLASS__, 'compare_box_shipment_ids' ) );
+
+        return $boxes;
+    }
+
+    /**
+     * Add a box's materials to its cost data: `materials`, `materials_total`
+     * and `total_cost` (label + materials).
+     *
+     * @param array $box get_box_cost() result.
+     * @return array
+     */
+    public static function with_materials( array $box ) {
+        $materials = FST_Supplies::get_box_materials( $box['tracking_number'] );
+
+        $box['materials']       = $materials;
+        $box['materials_total'] = $materials ? $materials['total'] : null;
+        $box['total_cost']      = null === $box['label_cost']
+            ? null
+            : FST_Label_Cost::from_cents( FST_Label_Cost::to_cents( $box['label_cost'] ) + ( $materials ? FST_Label_Cost::to_cents( $materials['total'] ) : 0 ) );
+
+        return $box;
+    }
+
+    /**
+     * usort callback: boxes by the id of their shipment row, oldest first.
+     */
+    private static function compare_box_shipment_ids( $a, $b ) {
+        return $a['shipment_id'] - $b['shipment_id'];
+    }
+
+    /**
+     * After a shipment row is deleted: if it held its box's cost data and
+     * other rows share the tracking number, move the data to the oldest
+     * surviving row so the box keeps its cost.
+     *
+     * @param object $removed The deleted row, as it was.
+     */
+    private static function rehome_box_cost( $removed ) {
+        if ( ! FST_Label_Cost::row_has_cost_data( $removed ) ) {
+            return;
+        }
+
+        $survivors = self::get_all_by_tracking( $removed->tracking_number );
+        if ( empty( $survivors ) ) {
+            return;
+        }
+
+        // A surviving row that already holds cost data stays the holder.
+        $box = FST_Label_Cost::box_from_rows( $survivors );
+        if ( $box['cost_shipment_id'] ) {
+            return;
+        }
+
+        $values = array();
+        foreach ( FST_Label_Cost::FIELDS as $field ) {
+            $values[ $field ] = isset( $removed->$field ) ? $removed->$field : null;
+        }
+
+        self::write_cost_columns( $survivors[0], $values );
+    }
+
+    /**
+     * Write the four cost columns of one row, and nothing else. Skips the
+     * query when the row already holds exactly these values.
+     *
+     * @param object $row    Shipment row as currently stored.
+     * @param array  $values All four fields => value or null.
+     * @return bool
+     */
+    private static function write_cost_columns( $row, array $values ) {
+        global $wpdb;
+
+        $changed = false;
+        foreach ( FST_Label_Cost::FIELDS as $field ) {
+            $current = isset( $row->$field ) ? $row->$field : null;
+            $wanted  = $values[ $field ];
+
+            if ( null === $current || null === $wanted ) {
+                $same = $current === $wanted;
+            } elseif ( 'label_cost' === $field || 'box_weight' === $field ) {
+                $same = number_format( (float) $current, 2, '.', '' ) === number_format( (float) $wanted, 2, '.', '' );
+            } else {
+                $same = (string) $current === (string) $wanted;
+            }
+
+            if ( ! $same ) {
+                $changed = true;
+                break;
+            }
+        }
+        if ( ! $changed ) {
+            return true;
+        }
+
+        // Naming updated_at keeps MySQL's ON UPDATE CURRENT_TIMESTAMP from
+        // touching it.
+        if ( isset( $row->updated_at ) ) {
+            $values['updated_at'] = $row->updated_at;
+        }
+
+        return false !== $wpdb->update( self::table(), $values, array( 'id' => $row->id ) );
+    }
+
+    /**
+     * Shipment rows for the label cost report of a ship-date range.
+     *
+     * Same exclusions as the rest of the Analytics page: a box counts when
+     * one of its rows has a status other than unknown / label_created and a
+     * ship date in the range (the end date included, see range_end()).
+     *
+     * @param string $date_from Optional. Y-m-d start date.
+     * @param string $date_to   Optional. Y-m-d end date.
+     * @return array {
+     *     @type string[] $tracking_numbers Boxes shipped in the range.
+     *     @type array    $rows             Every row of every order that has one of those
+     *                                      boxes (so a multi-box order's other boxes and a
+     *                                      shared box's other orders are all present).
+     * }
+     */
+    public static function get_cost_report_rows( $date_from = '', $date_to = '' ) {
+        global $wpdb;
+
+        $where  = "WHERE status NOT IN ('unknown','label_created')";
+        $values = array();
+
+        if ( $date_from ) {
+            $where   .= ' AND ship_date >= %s';
+            $values[] = $date_from;
+        }
+        if ( $date_to ) {
+            $where   .= ' AND ship_date <= %s';
+            $values[] = self::range_end( $date_to );
+        }
+
+        $sql = "SELECT DISTINCT tracking_number FROM " . self::table() . " {$where}";
+
+        $tracking_numbers = empty( $values )
+            ? $wpdb->get_col( $sql )
+            : $wpdb->get_col( $wpdb->prepare( $sql, ...$values ) );
+
+        if ( empty( $tracking_numbers ) ) {
+            return array(
+                'tracking_numbers' => array(),
+                'rows'             => array(),
+            );
+        }
+
+        // The orders in those boxes, then every row of those orders.
+        $order_ids = array();
+        foreach ( self::get_report_rows_in( 'tracking_number', $tracking_numbers, '%s' ) as $row ) {
+            $order_ids[ (int) $row->order_id ] = true;
+        }
+
+        return array(
+            'tracking_numbers' => $tracking_numbers,
+            'rows'             => self::get_report_rows_in( 'order_id', array_keys( $order_ids ), '%d' ),
+        );
+    }
+
+    /**
+     * Report columns of the rows whose $column is one of $values.
+     *
+     * @param string $column      'tracking_number' or 'order_id'.
+     * @param array  $values
+     * @param string $placeholder '%s' or '%d'.
+     * @return array
+     */
+    private static function get_report_rows_in( $column, array $values, $placeholder ) {
+        global $wpdb;
+
+        $column = 'order_id' === $column ? 'order_id' : 'tracking_number';
+        $rows   = array();
+
+        foreach ( array_chunk( $values, 500 ) as $chunk ) {
+            $placeholders = implode( ',', array_fill( 0, count( $chunk ), $placeholder ) );
+
+            $found = $wpdb->get_results( $wpdb->prepare(
+                "SELECT id, order_id, tracking_number, carrier, status, ship_date, label_cost, box_weight, box_dims, label_source
+                 FROM " . self::table() . "
+                 WHERE {$column} IN ({$placeholders})
+                 ORDER BY id ASC",
+                ...$chunk
+            ) );
+
+            $rows = array_merge( $rows, (array) $found );
+        }
+
+        return $rows;
     }
 
     /**
@@ -370,6 +705,19 @@ class FST_Shipment {
     }
 
     /**
+     * Upper bound of a ship-date range. ship_date is a DATETIME, so a bare
+     * Y-m-d end date has to mean the END of that day — compared as-is it is
+     * midnight, and everything shipped on the last day (today, for the
+     * preset ranges) fell out of the stats.
+     *
+     * @param string $date_to Y-m-d, or a full datetime (used unchanged).
+     * @return string
+     */
+    private static function range_end( $date_to ) {
+        return preg_match( '/^\d{4}-\d{2}-\d{2}$/', (string) $date_to ) ? $date_to . ' 23:59:59' : $date_to;
+    }
+
+    /**
      * Count shipments by status.
      *
      * @param string $date_from Optional. Y-m-d start date.
@@ -388,7 +736,7 @@ class FST_Shipment {
         }
         if ( $date_to ) {
             $where   .= ' AND ship_date <= %s';
-            $values[] = $date_to;
+            $values[] = self::range_end( $date_to );
         }
 
         // Dedupe across fan-out rows: combined-box shipments produce one row
@@ -501,7 +849,7 @@ class FST_Shipment {
         }
         if ( $date_to ) {
             $where   .= ' AND ship_date <= %s';
-            $values[] = $date_to;
+            $values[] = self::range_end( $date_to );
         }
 
         $sql = "SELECT carrier, COUNT(DISTINCT tracking_number) as count FROM " . self::table() . " {$where} GROUP BY carrier";
@@ -544,7 +892,7 @@ class FST_Shipment {
              GROUP BY DATE(ship_date)
              ORDER BY date ASC",
             $date_from,
-            $date_to
+            self::range_end( $date_to )
         ) );
     }
 
@@ -567,7 +915,7 @@ class FST_Shipment {
         }
         if ( $date_to ) {
             $where   .= ' AND ship_date <= %s';
-            $values[] = $date_to;
+            $values[] = self::range_end( $date_to );
         }
 
         // Dedupe before averaging so a combined-box shipment (one tracking#,
@@ -604,7 +952,7 @@ class FST_Shipment {
         }
         if ( $date_to ) {
             $where   .= ' AND ship_date <= %s';
-            $values[] = $date_to;
+            $values[] = self::range_end( $date_to );
         }
 
         // Same dedupe as avg_delivery_days(): one row per tracking_number

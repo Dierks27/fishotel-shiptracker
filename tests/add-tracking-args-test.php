@@ -76,6 +76,7 @@ class WP_Error {
 }
 
 require_once ABSPATH . 'includes/carriers/class-fst-carrier.php';
+require_once ABSPATH . 'includes/class-fst-label-cost.php';
 require_once ABSPATH . 'includes/class-fst-order.php';
 
 // ---------------------------------------------------------------------------
@@ -310,9 +311,39 @@ fst_assert_same(
         'carrier'         => 'ups',
         'line_item_ids'   => array( 123 ),
         'ship_date'       => '2026-10-09 00:00:00',
+        'label_cost'      => null,
+        'box_weight'      => null,
+        'box_dims'        => null,
+        'label_source'    => null,
     ),
     $result,
-    'normalised array has exactly the five keys the service reads'
+    'normalised array has exactly the nine keys the service reads; the cost fields are NULL when not sent'
+);
+
+// The optional cost fields (1.9.17) — spellings are covered in
+// tests/label-cost-args-test.php; this checks they ride along.
+$result = FST_Order::normalize_add_tracking_args( array(
+    'order_id'        => 34183,
+    'tracking_number' => $ups_number,
+    'line_item_ids'   => array( 123 ),
+    'label_cost'      => '$18.4',
+    'box_weight'      => '11 lbs',
+    'box_dims'        => '10 X 10 X 10 in',
+    'label_source'    => ' Partner A ',
+) );
+fst_assert_same(
+    array( '18.40', '11.00', '10x10x10', 'Partner A' ),
+    array( $result['label_cost'], $result['box_weight'], $result['box_dims'], $result['label_source'] ),
+    'cost fields come back normalised'
+);
+fst_assert_error(
+    FST_Order::normalize_add_tracking_args( array(
+        'order_id'        => 34183,
+        'tracking_number' => $ups_number,
+        'line_item_ids'   => array( 123 ),
+        'label_cost'      => '-1',
+    ) ),
+    'fst_invalid_label_cost', 'The label cost must be an amount of 0 or more, for example 18.40.', 'negative label cost'
 );
 
 // ---------------------------------------------------------------------------

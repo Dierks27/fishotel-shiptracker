@@ -61,6 +61,14 @@ class FST_Activator {
 
     /**
      * Create custom database tables.
+     *
+     * dbDelta only ever adds: upgrading from DB version 1.2.0 (no cost
+     * columns) or 1.3.0 (no supplies tables) keeps every existing row.
+     *
+     * DB version 1.4.0 adds three tables, described in FST_Supplies:
+     * wp_fst_supply_purchases (the purchase log), wp_fst_supply_usage (the
+     * materials of a box, keyed by tracking number — or by order for a local
+     * pickup) and wp_fst_supply_counts (recount corrections).
      */
     private static function create_tables() {
         global $wpdb;
@@ -68,6 +76,9 @@ class FST_Activator {
         $charset_collate = $wpdb->get_charset_collate();
         $shipments_table = $wpdb->prefix . 'fst_shipments';
         $events_table    = $wpdb->prefix . 'fst_tracking_events';
+        $purchases_table = $wpdb->prefix . 'fst_supply_purchases';
+        $usage_table     = $wpdb->prefix . 'fst_supply_usage';
+        $counts_table    = $wpdb->prefix . 'fst_supply_counts';
 
         $sql = "CREATE TABLE {$shipments_table} (
             id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
@@ -86,6 +97,10 @@ class FST_Activator {
             easypost_tracker_id varchar(64) NOT NULL DEFAULT '',
             tracker_provider varchar(20) NOT NULL DEFAULT '',
             check_count int(11) NOT NULL DEFAULT 0,
+            label_cost decimal(10,2) DEFAULT NULL,
+            box_weight decimal(6,2) DEFAULT NULL,
+            box_dims varchar(40) DEFAULT NULL,
+            label_source varchar(40) DEFAULT NULL,
             created_at datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
             updated_at datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
             PRIMARY KEY  (id),
@@ -111,6 +126,49 @@ class FST_Activator {
             KEY shipment_id (shipment_id),
             KEY status (status),
             KEY event_time (event_time)
+        ) {$charset_collate};
+
+        CREATE TABLE {$purchases_table} (
+            id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
+            supply_id bigint(20) unsigned NOT NULL,
+            purchase_date date NOT NULL,
+            qty decimal(12,2) NOT NULL DEFAULT 0.00,
+            total_paid decimal(10,2) NOT NULL DEFAULT 0.00,
+            note varchar(190) NOT NULL DEFAULT '',
+            created_at datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY  (id),
+            KEY supply_id (supply_id),
+            KEY purchase_date (purchase_date)
+        ) {$charset_collate};
+
+        CREATE TABLE {$usage_table} (
+            id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
+            tracking_number varchar(100) NOT NULL DEFAULT '',
+            order_id bigint(20) unsigned NOT NULL DEFAULT 0,
+            kind varchar(10) NOT NULL DEFAULT 'supply',
+            supply_id bigint(20) unsigned NOT NULL DEFAULT 0,
+            supply_name varchar(60) NOT NULL DEFAULT '',
+            role varchar(20) NOT NULL DEFAULT '',
+            unit varchar(20) NOT NULL DEFAULT '',
+            qty decimal(12,2) NOT NULL DEFAULT 0.00,
+            unit_cost decimal(12,4) NOT NULL DEFAULT 0.0000,
+            line_cost decimal(10,2) NOT NULL DEFAULT 0.00,
+            recorded_at datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY  (id),
+            KEY tracking_number (tracking_number),
+            KEY order_id (order_id),
+            KEY supply_id (supply_id)
+        ) {$charset_collate};
+
+        CREATE TABLE {$counts_table} (
+            id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
+            supply_id bigint(20) unsigned NOT NULL,
+            counted decimal(12,2) NOT NULL DEFAULT 0.00,
+            delta decimal(12,2) NOT NULL DEFAULT 0.00,
+            counted_at datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            user_id bigint(20) unsigned NOT NULL DEFAULT 0,
+            PRIMARY KEY  (id),
+            KEY supply_id (supply_id)
         ) {$charset_collate};";
 
         require_once ABSPATH . 'wp-admin/includes/upgrade.php';

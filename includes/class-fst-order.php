@@ -20,6 +20,8 @@ class FST_Order {
         add_action( 'wp_ajax_fst_add_tracking', array( $this, 'ajax_add_tracking' ) );
         add_action( 'wp_ajax_fst_remove_tracking', array( $this, 'ajax_remove_tracking' ) );
         add_action( 'wp_ajax_fst_recheck_tracking', array( $this, 'ajax_recheck_tracking' ) );
+        add_action( 'wp_ajax_fst_set_label_cost', array( $this, 'ajax_set_label_cost' ) );
+        add_action( 'wp_ajax_fst_set_ship_mode', array( $this, 'ajax_set_ship_mode' ) );
 
         // Add shipments column to WooCommerce orders list.
         add_filter( 'manage_edit-shop_order_columns', array( $this, 'add_orders_column' ) );
@@ -66,6 +68,7 @@ class FST_Order {
     public function render_meta_box( $post_or_order ) {
         $order_id  = $post_or_order instanceof WC_Order ? $post_or_order->get_id() : $post_or_order->ID;
         $shipments = $this->get_effective_shipments( $order_id );
+        $order     = wc_get_order( $order_id );
 
         wp_nonce_field( 'fst_tracking_nonce', 'fst_tracking_nonce_field' );
         ?>
@@ -105,6 +108,32 @@ class FST_Order {
                                 }
                             }
                             ?>
+                            <?php
+                            // What this box cost to ship. Read by tracking number:
+                            // the cost belongs to the box, not to this row.
+                            $box       = FST_Shipment::get_box_cost( $shipment->tracking_number );
+                            $materials = FST_Supplies::get_box_materials( $shipment->tracking_number );
+                            ?>
+                            <div class="fst-label-cost" style="margin-top: 4px; font-size: 12px;">
+                                <?php echo wp_kses_post( $this->describe_box_cost( $box ) ); ?>
+                                <a href="#" class="fst-cost-edit-toggle" style="margin-left: 4px;">
+                                    <?php echo ( $box && $box['cost_shipment_id'] ) || $materials ? 'Edit' : 'Add label cost'; ?>
+                                </a>
+                            </div>
+                            <div class="fst-box-materials" style="margin-top: 2px; font-size: 12px;">
+                                <?php echo wp_kses_post( $this->describe_materials( $materials ) ); ?>
+                            </div>
+                            <div class="fst-cost-form" style="display: none; margin-top: 6px; padding: 8px; background: #f9f9f9; border: 1px solid #e0e0e0; border-radius: 4px;">
+                                <?php $this->render_cost_inputs( $box ? $box : array() ); ?>
+                                <?php
+                                // Not recorded yet: offer what this box usually takes.
+                                $this->render_materials_inputs( $materials, $materials ? null : $this->suggest_box_materials( $shipment, $box ) );
+                                ?>
+                                <button type="button" class="button button-small fst-cost-save-btn" data-id="<?php echo esc_attr( $shipment->id ); ?>">
+                                    Save box costs
+                                </button>
+                                <span class="fst-cost-message" style="margin-left: 6px; font-size: 12px;"></span>
+                            </div>
                             <div class="fst-shipment-actions">
                                 <a href="#" class="fst-recheck-btn" data-id="<?php echo esc_attr( $shipment->id ); ?>" title="Re-check status">
                                     &#x21bb; Re-check
@@ -119,10 +148,13 @@ class FST_Order {
                 <hr style="margin: 10px 0;">
             <?php endif; ?>
 
+            <?php if ( empty( $shipments ) && $order ) : ?>
+                <?php $this->render_ship_mode( $order ); ?>
+            <?php endif; ?>
+
             <!-- Add new tracking form -->
             <div class="fst-add-tracking-form">
                 <?php
-                $order      = wc_get_order( $order_id );
                 $line_items = $order ? $order->get_items() : array();
                 // Fulfillment items don't 1:1 with source order items, and
                 // ajax_add_tracking handles the fan-out via meta lookup. Skip
@@ -192,11 +224,284 @@ class FST_Order {
                         <option value="usps">USPS</option>
                     </select>
                 </p>
+                <div id="fst-add-cost-fields" style="margin-bottom: 8px;">
+                    <p style="margin: 0 0 6px; font-weight: 600; font-size: 12px;">What this box cost to ship (optional):</p>
+                    <?php $this->render_cost_inputs( array(), true ); ?>
+                </div>
                 <button type="button" id="fst-add-tracking-btn" class="button button-primary widefat">
                     Add Tracking Info
                 </button>
                 <div id="fst-tracking-message" style="margin-top: 8px; display: none;"></div>
             </div>
+        </div>
+        <?php
+    }
+
+    /**
+     * One line describing a box's recorded cost for the meta box, e.g.
+     * "Label: $18.40 · 10x10x10 · 11 lb · Partner A".
+     *
+     * @param array|null $box FST_Shipment::get_box_cost() result.
+     * @return string HTML (escaped; the price markup comes from wc_price()).
+     */
+    private function describe_box_cost( $box ) {
+        if ( ! $box || ! $box['cost_shipment_id'] ) {
+            return '<span style="color: #999;">Label cost not recorded.</span>';
+        }
+
+        $parts = array();
+        if ( null !== $box['label_cost'] ) {
+            $parts[] = 'Label: ' . wc_price( $box['label_cost'] );
+        }
+        if ( null !== $box['box_dims'] ) {
+            $parts[] = esc_html( FST_Label_Cost::size_label( $box['box_dims'], FST_Settings::get_standard_boxes() ) );
+        }
+        if ( null !== $box['box_weight'] ) {
+            $parts[] = esc_html( FST_Label_Cost::trim_decimal( $box['box_weight'] ) . ' lb' );
+        }
+        if ( null !== $box['label_source'] ) {
+            $parts[] = esc_html( $box['label_source'] );
+        }
+
+        $line = implode( ' &middot; ', $parts );
+        if ( $box['shared_box'] ) {
+            $line .= sprintf( ' <span style="color: #999;">(one box, %d orders)</span>', count( $box['order_ids'] ) );
+        }
+
+        return $line;
+    }
+
+    /**
+     * One line describing a box's recorded materials for the meta box, e.g.
+     * "Materials: $3.46 · 1 × Small box · 6 × Fish bag · foam $1.80 · paper $0.40".
+     *
+     * @param array|null $materials FST_Supplies::get_box_materials() result.
+     * @return string HTML (escaped; the price markup comes from wc_price()).
+     */
+    private function describe_materials( $materials ) {
+        if ( ! $materials ) {
+            return '<span style="color: #999;">Materials not recorded.</span>';
+        }
+
+        $parts = array( 'Materials: ' . wc_price( $materials['total'] ) );
+        foreach ( $materials['lines'] as $line ) {
+            $parts[] = esc_html( FST_Label_Cost::trim_decimal( $line['qty'] ) . ' × ' . $line['name'] );
+        }
+        if ( (float) $materials['foam_cost'] > 0 ) {
+            $parts[] = 'foam ' . wc_price( $materials['foam_cost'] );
+        }
+        if ( (float) $materials['paper_cost'] > 0 ) {
+            $parts[] = 'paper ' . wc_price( $materials['paper_cost'] );
+        }
+
+        return implode( ' &middot; ', $parts );
+    }
+
+    /**
+     * What a box that has no materials recorded would usually take: the
+     * defaults of its standard box (or of a custom size) for the fish of
+     * this shipment and the order's weather action.
+     *
+     * @param object     $shipment Shipment row.
+     * @param array|null $box      FST_Shipment::get_box_cost() result.
+     * @return array FST_Supplies materials record.
+     */
+    private function suggest_box_materials( $shipment, $box ) {
+        $order    = wc_get_order( $shipment->order_id );
+        $item_ids = ! empty( $shipment->line_item_ids ) ? json_decode( $shipment->line_item_ids, true ) : null;
+
+        return FST_Supplies::default_materials(
+            FST_Supplies::standard_box_for_dims( $box ? $box['box_dims'] : null ),
+            FST_Supplies::get_supplies_raw(),
+            FST_Supplies::get_prices(),
+            FST_Supplies::fish_count( $order, is_array( $item_ids ) ? $item_ids : null ),
+            FST_Supplies::order_pack_action( $order )
+        );
+    }
+
+    /**
+     * Render the materials inputs: a quantity per saved supply and the two
+     * flat amounts, foam and paper. admin.js reads them by class from the
+     * enclosing element and posts them as `materials`.
+     *
+     * @param array|null $materials What is recorded (FST_Supplies record).
+     * @param array|null $suggested Shown instead while nothing is recorded.
+     */
+    private function render_materials_inputs( $materials, $suggested = null ) {
+        $shown    = $materials ? $materials : $suggested;
+        $supplies = FST_Supplies::get_supplies_raw();
+
+        // Foam and paper are the two flat amounts below, so their supplies
+        // get no quantity box here (it would invite counting them twice).
+        $rows = array();
+        foreach ( $supplies as $supply ) {
+            if ( 'foam' === $supply['role'] || 'paper' === $supply['role'] ) {
+                continue;
+            }
+            $rows[ $supply['id'] ] = array( 'label' => $supply['name'] . ' (' . $supply['unit'] . ')', 'qty' => '' );
+        }
+        // A recorded line stays editable after its supply left the list.
+        foreach ( $shown ? $shown['lines'] : array() as $line ) {
+            if ( ! isset( $rows[ $line['supply_id'] ] ) ) {
+                $rows[ $line['supply_id'] ] = array( 'label' => $line['name'] . ' (' . $line['unit'] . ')', 'qty' => '' );
+            }
+            $rows[ $line['supply_id'] ]['qty'] = FST_Label_Cost::trim_decimal( $line['qty'] );
+        }
+
+        ?>
+        <div class="fst-mat-fields" style="margin: 0 0 6px;">
+            <p style="margin: 0 0 4px; font-weight: 600; font-size: 12px;">What went into it:</p>
+            <?php if ( ! $materials && $suggested ) : ?>
+                <p style="margin: 0 0 4px; font-size: 11px; color: #666;">Nothing recorded yet &mdash; this is the usual. Saving records it.</p>
+            <?php endif; ?>
+            <?php foreach ( $rows as $supply_id => $row ) : ?>
+                <label style="display: flex; align-items: center; justify-content: space-between; gap: 6px; margin: 0 0 4px; font-size: 12px;">
+                    <span><?php echo esc_html( $row['label'] ); ?></span>
+                    <input type="number" class="fst-mat-qty" data-supply-id="<?php echo esc_attr( $supply_id ); ?>" min="0" step="0.01" placeholder="0" value="<?php echo esc_attr( $row['qty'] ); ?>" style="width: 70px;">
+                </label>
+            <?php endforeach; ?>
+            <label style="display: flex; align-items: center; justify-content: space-between; gap: 6px; margin: 0 0 4px; font-size: 12px;">
+                <span>Foam cost</span>
+                <input type="text" class="fst-mat-foam" inputmode="decimal" placeholder="0.00" value="<?php echo esc_attr( $shown ? $shown['foam_cost'] : '' ); ?>" style="width: 70px;">
+            </label>
+            <label style="display: flex; align-items: center; justify-content: space-between; gap: 6px; margin: 0 0 4px; font-size: 12px;">
+                <span>Paper cost</span>
+                <input type="text" class="fst-mat-paper" inputmode="decimal" placeholder="0.00" value="<?php echo esc_attr( $shown ? $shown['paper_cost'] : '' ); ?>" style="width: 70px;">
+            </label>
+        </div>
+        <?php
+    }
+
+    /**
+     * Render "How it went out" for an order with no shipment: with a label
+     * (the form below), as a local pickup, or in another order's box.
+     *
+     * @param WC_Order $order
+     */
+    private function render_ship_mode( $order ) {
+        $state = FST_Ship_Mode::describe( $order );
+
+        // A pickup needs no heat pack: the suggestion is bags only.
+        $suggested = $state['materials'] ? null : FST_Supplies::default_materials(
+            null,
+            FST_Supplies::get_supplies_raw(),
+            FST_Supplies::get_prices(),
+            FST_Supplies::fish_count( $order ),
+            ''
+        );
+
+        ?>
+        <div class="fst-ship-mode" data-order-id="<?php echo esc_attr( $order->get_id() ); ?>" style="margin-bottom: 10px; padding: 8px; background: #f9f9f9; border: 1px solid #e0e0e0; border-radius: 4px;">
+            <p style="margin: 0 0 6px; font-weight: 600; font-size: 12px;">How it went out:</p>
+            <select class="fst-ship-mode-select widefat" style="margin-bottom: 6px;">
+                <option value="label" <?php selected( $state['mode'], 'label' ); ?>>With a label &mdash; add the tracking below</option>
+                <option value="local" <?php selected( $state['mode'], 'local' ); ?>>Local pickup &mdash; no label</option>
+                <option value="with_order" <?php selected( $state['mode'], 'with_order' ); ?>>Went in another order's box</option>
+            </select>
+            <p class="fst-ship-with-row" style="margin: 0 0 6px;<?php echo 'with_order' === $state['mode'] ? '' : ' display: none;'; ?>">
+                <input type="number" class="fst-ship-with-order widefat" min="1" step="1" placeholder="Order number of the box it went in" value="<?php echo esc_attr( $state['with_order_id'] ? $state['with_order_id'] : '' ); ?>">
+            </p>
+            <div class="fst-ship-local-row" style="<?php echo 'local' === $state['mode'] ? '' : 'display: none;'; ?>">
+                <?php $this->render_materials_inputs( $state['materials'], $suggested ); ?>
+            </div>
+            <button type="button" class="button button-small fst-ship-mode-save">Save</button>
+            <span class="fst-ship-mode-message" style="margin-left: 6px; font-size: 12px;">
+                <?php if ( 'local' === $state['mode'] ) : ?>
+                    Local pickup<?php echo $state['materials_total'] ? ' &middot; materials ' . wp_kses_post( wc_price( $state['materials_total'] ) ) : ''; ?>
+                <?php elseif ( 'with_order' === $state['mode'] ) : ?>
+                    In the box of order #<?php echo esc_html( $state['with_order_number'] ); ?>
+                <?php endif; ?>
+            </span>
+        </div>
+        <?php
+    }
+
+    /**
+     * Render the four optional cost inputs: label cost, box (a dropdown of
+     * the standard boxes plus Custom when any are saved), weight and label
+     * source (a dropdown when sources are saved, free text otherwise).
+     *
+     * admin.js reads them by class from the enclosing element, so the same
+     * markup serves the add form and each existing shipment's edit form.
+     *
+     * @param array $values Current label_cost / box_weight / box_dims / label_source.
+     * @param bool  $named  Give the inputs form names, for the non-AJAX
+     *                      fallback save of the add form (save_tracking_data()).
+     */
+    private function render_cost_inputs( array $values, $named = false ) {
+        $boxes   = FST_Settings::get_standard_boxes();
+        $sources = FST_Settings::get_label_sources();
+
+        $cost   = isset( $values['label_cost'] ) ? (string) $values['label_cost'] : '';
+        $weight = isset( $values['box_weight'] ) ? FST_Label_Cost::trim_decimal( $values['box_weight'] ) : '';
+        $dims   = isset( $values['box_dims'] ) ? (string) $values['box_dims'] : '';
+        $source = isset( $values['label_source'] ) ? (string) $values['label_source'] : '';
+
+        $is_standard = false;
+        foreach ( $boxes as $standard_box ) {
+            if ( $standard_box['dims'] === $dims ) {
+                $is_standard = true;
+                break;
+            }
+        }
+        $is_custom = '' !== $dims && ! $is_standard;
+
+        ?>
+        <div class="fst-cost-fields">
+            <p style="margin: 0 0 6px;">
+                <input type="text" class="fst-cost-amount widefat" inputmode="decimal"
+                       <?php echo $named ? 'name="fst_label_cost"' : ''; ?>
+                       placeholder="Label cost, e.g. 18.40" value="<?php echo esc_attr( $cost ); ?>">
+            </p>
+            <?php if ( ! empty( $boxes ) ) : ?>
+                <p style="margin: 0 0 6px;">
+                    <select class="fst-cost-box widefat" <?php echo $named ? 'name="fst_box_size"' : ''; ?>>
+                        <option value="">&mdash; Box size &mdash;</option>
+                        <?php
+                        // Two saved boxes of the same size: only the first is preselected.
+                        $preselected = false;
+                        foreach ( $boxes as $standard_box ) :
+                            $is_current  = ! $preselected && $standard_box['dims'] === $dims;
+                            $preselected = $preselected || $is_current;
+                            ?>
+                            <option value="<?php echo esc_attr( $standard_box['dims'] ); ?>" <?php selected( $is_current ); ?>>
+                                <?php echo esc_html( $standard_box['name'] . ' (' . $standard_box['dims'] . ')' ); ?>
+                            </option>
+                        <?php endforeach; ?>
+                        <option value="custom" <?php selected( $is_custom ); ?>>Custom size&hellip;</option>
+                    </select>
+                </p>
+            <?php endif; ?>
+            <p class="fst-cost-dims-row" style="margin: 0 0 6px;<?php echo ( ! empty( $boxes ) && ! $is_custom ) ? ' display: none;' : ''; ?>">
+                <input type="text" class="fst-cost-dims widefat"
+                       <?php echo $named ? 'name="fst_box_dims"' : ''; ?>
+                       placeholder="Box size in inches, e.g. 10x10x10" value="<?php echo esc_attr( $is_custom || empty( $boxes ) ? $dims : '' ); ?>">
+            </p>
+            <p style="margin: 0 0 6px;">
+                <input type="text" class="fst-cost-weight widefat" inputmode="decimal"
+                       <?php echo $named ? 'name="fst_box_weight"' : ''; ?>
+                       placeholder="Weight in lb" value="<?php echo esc_attr( $weight ); ?>">
+            </p>
+            <p style="margin: 0 0 6px;">
+                <?php if ( ! empty( $sources ) ) : ?>
+                    <select class="fst-cost-source widefat" <?php echo $named ? 'name="fst_label_source"' : ''; ?>>
+                        <option value="">&mdash; Label bought through &mdash;</option>
+                        <?php foreach ( $sources as $saved_source ) : ?>
+                            <option value="<?php echo esc_attr( $saved_source ); ?>" <?php selected( $saved_source, $source ); ?>>
+                                <?php echo esc_html( $saved_source ); ?>
+                            </option>
+                        <?php endforeach; ?>
+                        <?php if ( '' !== $source && ! in_array( $source, $sources, true ) ) : ?>
+                            <?php // Free text recorded earlier that is not on the list — keep it selectable. ?>
+                            <option value="<?php echo esc_attr( $source ); ?>" selected><?php echo esc_html( $source ); ?></option>
+                        <?php endif; ?>
+                    </select>
+                <?php else : ?>
+                    <input type="text" class="fst-cost-source widefat" maxlength="40"
+                           <?php echo $named ? 'name="fst_label_source"' : ''; ?>
+                           placeholder="Label bought through" value="<?php echo esc_attr( $source ); ?>">
+                <?php endif; ?>
+            </p>
         </div>
         <?php
     }
@@ -250,6 +555,12 @@ class FST_Order {
      * (string error message / success data with `message`) are the contract
      * the plugin's own meta box AND the theme's "Shipments" box rely on —
      * keep them stable. Sanitisation happens in normalize_add_tracking_args().
+     *
+     * Optional since 1.9.17: label_cost, box_weight, box_dims, label_source —
+     * what the box cost to ship. Leaving them out (or empty) records nothing.
+     *
+     * Optional since 1.9.18: materials — an array or a JSON string, see
+     * add_tracking(). Left out, a standard box records its usual materials.
      */
     public function ajax_add_tracking() {
         check_ajax_referer( 'fst_nonce', 'nonce' );
@@ -263,6 +574,14 @@ class FST_Order {
             if ( isset( $_POST[ $field ] ) ) {
                 $args[ $field ] = $_POST[ $field ]; // phpcs:ignore WordPress.Security -- sanitised by normalize_add_tracking_args().
             }
+        }
+        foreach ( FST_Label_Cost::FIELDS as $field ) {
+            if ( isset( $_POST[ $field ] ) ) {
+                $args[ $field ] = wp_unslash( $_POST[ $field ] ); // phpcs:ignore WordPress.Security -- sanitised by normalize_add_tracking_args().
+            }
+        }
+        if ( isset( $_POST['materials'] ) ) {
+            $args['materials'] = wp_unslash( $_POST['materials'] ); // phpcs:ignore WordPress.Security -- validated by FST_Supplies::normalize_materials().
         }
 
         $result = $this->add_tracking( $args );
@@ -289,9 +608,18 @@ class FST_Order {
      *     @type int[]|string $line_item_ids   WC_Order_Item IDs in this box — array, or a
      *                                         comma-separated string for form-encoded callers.
      *     @type string       $ship_date       Optional Y-m-d. Null means "now" at create time.
+     *     @type string|float $label_cost      Optional. What the label cost: 0 or more, "$" and
+     *                                         thousands separators tolerated, rounded to cents.
+     *     @type string|float $box_weight      Optional. Pounds, above 0.
+     *     @type string       $box_dims        Optional. "10x10x10" in inches (also "10 x 10 x 10",
+     *                                         "10*10*10", "10X10X10 in") or a standard box name.
+     *     @type string       $label_source    Optional. Where the label was bought (40 characters).
      * }
-     * @return array|WP_Error Normalised args, or WP_Error with code
-     *                        `fst_missing_args` or `fst_invalid_ship_date`.
+     * @return array|WP_Error Normalised args — the four cost keys are always
+     *                        present, null when absent or empty — or WP_Error
+     *                        with code `fst_missing_args`, `fst_invalid_ship_date`,
+     *                        `fst_invalid_label_cost`, `fst_invalid_box_weight`
+     *                        or `fst_invalid_box_dims`.
      */
     public static function normalize_add_tracking_args( array $args ) {
         $order_id        = isset( $args['order_id'] ) && is_scalar( $args['order_id'] ) ? absint( $args['order_id'] ) : 0;
@@ -335,12 +663,22 @@ class FST_Order {
             $ship_date = $raw_date . ' 00:00:00';
         }
 
+        // What the box cost to ship — all optional (see FST_Label_Cost).
+        $cost_fields = FST_Label_Cost::normalize_fields( $args );
+        if ( is_wp_error( $cost_fields ) ) {
+            return $cost_fields;
+        }
+
         return array(
             'order_id'        => $order_id,
             'tracking_number' => $tracking_number,
             'carrier'         => $carrier,
             'line_item_ids'   => $line_item_ids,
             'ship_date'       => $ship_date,
+            'label_cost'      => $cost_fields['label_cost'],
+            'box_weight'      => $cost_fields['box_weight'],
+            'box_dims'        => $cost_fields['box_dims'],
+            'label_source'    => $cost_fields['label_source'],
         );
     }
 
@@ -353,7 +691,21 @@ class FST_Order {
      * carrier auto-detect, EasyPost routing / first carrier poll, order notes
      * and the Processing → Shipped transition.
      *
-     * @param array $args See normalize_add_tracking_args().
+     * The optional cost fields (label_cost, box_weight, box_dims,
+     * label_source) describe the BOX. However many rows the fan-out writes
+     * for the tracking number, they are stored once — see
+     * FST_Shipment::set_box_cost() — so no report can count a box twice.
+     *
+     * The optional `materials` — { lines: [ { supply_id | supply, qty } ],
+     * foam_cost, paper_cost }, as an array or a JSON string — are what went
+     * into the box besides the label (FST_Supplies::normalize_materials()),
+     * stored once per tracking number too. When the key is ABSENT and
+     * `box_dims` is a standard box, that box's usual materials are recorded:
+     * one of its own supply, its foam and paper cost, a fish bag per fish,
+     * a heat pack or its ice packs when the order's weather action asks for
+     * them. When it is present it is taken as sent (null = record nothing).
+     *
+     * @param array $args See normalize_add_tracking_args(); plus `materials`.
      * @return array|WP_Error {
      *     @type string $message           Human-readable summary (what the meta box shows).
      *     @type int    $shipment_id       First created shipment id.
@@ -364,9 +716,11 @@ class FST_Order {
      *     @type array  $shipments         Per-shipment summary after the first poll / EasyPost registration.
      *     @type array  $order_statuses    order_id => WooCommerce status after the transition.
      * }
-     * Error codes: fst_missing_args, fst_invalid_ship_date, fst_no_items,
-     * fst_nothing_added (bad input), fst_order_not_found, fst_duplicate_tracking,
-     * fst_create_failed. Messages are the ones the admin meta box shows.
+     * Error codes: fst_missing_args, fst_invalid_ship_date, fst_invalid_label_cost,
+     * fst_invalid_box_weight, fst_invalid_box_dims, fst_invalid_materials,
+     * fst_unknown_supply, fst_no_items, fst_nothing_added (bad input),
+     * fst_order_not_found, fst_duplicate_tracking, fst_create_failed.
+     * Messages are the ones the admin meta box shows.
      */
     public function add_tracking( array $args ) {
         $normalized = self::normalize_add_tracking_args( $args );
@@ -379,6 +733,21 @@ class FST_Order {
         $carrier         = $normalized['carrier'];
         $line_item_ids   = $normalized['line_item_ids'];
         $ship_date       = $normalized['ship_date'] ? $normalized['ship_date'] : current_time( 'mysql' );
+
+        // Materials sent with the tracking number are checked before anything
+        // is saved, like the cost fields. false = the key was not sent.
+        $materials = false;
+        if ( array_key_exists( 'materials', $args ) ) {
+            $materials = FST_Supplies::normalize_materials(
+                $args['materials'],
+                FST_Supplies::get_supplies_raw(),
+                FST_Supplies::get_prices(),
+                FST_Supplies::get_box_materials( $tracking_number )
+            );
+            if ( is_wp_error( $materials ) ) {
+                return $materials;
+            }
+        }
 
         // Regular (non-fulfillment) orders must POST an explicit line_item_ids[]
         // subset from the meta-box checkboxes. Without that guard, mixed orders
@@ -407,6 +776,7 @@ class FST_Order {
         $shipment_ids = array();
         $failures     = array();
         $skipped      = array();
+        $fish_count   = 0;
 
         foreach ( $target_order_ids as $target_id ) {
             // Skip if this exact tracking# is already on this order (allows duplicates
@@ -483,6 +853,12 @@ class FST_Order {
 
             $shipment_ids[] = $shipment_id;
 
+            // The fish in this box: the quantities of the items it holds.
+            $fish_count += FST_Supplies::fish_count( $source_order, ! empty( $items_for_this_order ) ? $items_for_this_order : null );
+
+            // A label of its own ends "local pickup" / "went in another order's box".
+            $this->end_ship_mode( $source_order );
+
             // Add order note + transition source order. Only flip to "Shipped" once
             // every line item on that order is covered by a shipment — partial
             // fulfillments stay in Processing and just get a note.
@@ -519,6 +895,35 @@ class FST_Order {
                 return new WP_Error( 'fst_nothing_added', 'None of the selected items belong to the target order(s). No tracking was added.' );
             }
             return new WP_Error( 'fst_duplicate_tracking', 'This tracking number is already on this order.' );
+        }
+
+        // One box, one cost: whatever was sent about the box is stored once
+        // for the tracking number — on the first row this call created,
+        // unless a row from an earlier call already holds it. Fields left
+        // out change nothing.
+        $cost_fields = array();
+        foreach ( FST_Label_Cost::FIELDS as $field ) {
+            if ( null !== $normalized[ $field ] ) {
+                $cost_fields[ $field ] = $normalized[ $field ];
+            }
+        }
+        if ( ! empty( $cost_fields ) ) {
+            FST_Shipment::set_box_cost( $tracking_number, $cost_fields, $shipment_ids[0] );
+        }
+
+        // Materials: what was sent, or — nothing sent and a standard box
+        // chosen — what that box usually takes. A box that already has
+        // materials (an earlier call for the same tracking number) keeps them.
+        if ( is_array( $materials ) ) {
+            FST_Supplies::set_box_materials( $tracking_number, $materials );
+        } elseif ( false === $materials && null !== $normalized['box_dims'] ) {
+            $this->record_default_materials(
+                $tracking_number,
+                isset( $args['box_dims'] ) ? $args['box_dims'] : '',
+                $normalized['box_dims'],
+                $fish_count,
+                $submitting_order
+            );
         }
 
         // Register / poll each newly created shipment.
@@ -563,6 +968,14 @@ class FST_Order {
      * int array (NULL stays NULL = covers every item of order_id), plus the
      * status label and carrier tracking URL. The DB row shape is untouched.
      *
+     * label_cost, box_weight, box_dims and label_source are the BOX's values
+     * (looked up by tracking number — the row itself may hold NULL when a
+     * sibling row carries them); `shared_box` is true when other orders have
+     * a row for the same tracking number. `materials` (FST_Supplies record,
+     * null when none are recorded), `materials_total` and `total_cost`
+     * (label + materials, null while the label cost is not recorded) are the
+     * box's as well.
+     *
      * @param object $row Shipment row (stdClass from FST_Shipment).
      * @return array
      */
@@ -575,6 +988,9 @@ class FST_Order {
             }
         }
 
+        $box = FST_Shipment::get_box_cost( $row->tracking_number );
+        $box = $box ? FST_Shipment::with_materials( $box ) : null;
+
         return array(
             'id'               => (int) $row->id,
             'order_id'         => (int) $row->order_id,
@@ -586,6 +1002,14 @@ class FST_Order {
             'status_detail'    => isset( $row->status_detail ) ? $row->status_detail : '',
             'tracker_provider' => isset( $row->tracker_provider ) ? $row->tracker_provider : '',
             'line_item_ids'    => $line_item_ids,
+            'label_cost'       => $box ? $box['label_cost'] : null,
+            'box_weight'       => $box ? $box['box_weight'] : null,
+            'box_dims'         => $box ? $box['box_dims'] : null,
+            'label_source'     => $box ? $box['label_source'] : null,
+            'shared_box'       => $box ? $box['shared_box'] : false,
+            'materials'        => $box ? $box['materials'] : null,
+            'materials_total'  => $box ? $box['materials_total'] : null,
+            'total_cost'       => $box ? $box['total_cost'] : null,
             'ship_date'        => isset( $row->ship_date ) ? $row->ship_date : null,
             'est_delivery'     => isset( $row->est_delivery ) ? $row->est_delivery : null,
             'delivered_date'   => isset( $row->delivered_date ) ? $row->delivered_date : null,
@@ -625,6 +1049,15 @@ class FST_Order {
      *     @type array      $source_orders Fulfillments only, one per source_order_ids entry:
      *                                     { id, number, status, line_items[], fully_shipped, shipments[] }
      *                                     computed from that source's OWN rows. Empty for regular orders.
+     *     @type array      $ship_mode     FST_Ship_Mode::describe(): mode (label | local | with_order),
+     *                                     with_order_id, with_order_number, date, materials, materials_total.
+     *     @type string     $weather_action The weather action seen for the order (heat_pack, cooling,
+     *                                     none, …; '' when there is none) — FST_Supplies::order_pack_action().
+     *     @type int|float  $fish_count    Fish the next box is taken to hold: the quantities of the
+     *                                     items not in a box yet (all of them when none or all are).
+     *     @type array      $default_materials { boxes: [ { name, dims, materials } ], custom: materials } —
+     *                                     what each standard box (and a custom one) would start with
+     *                                     for this order, so a form can prefill.
      * }
      */
     public function describe_order_shipments( $order_id ) {
@@ -661,18 +1094,122 @@ class FST_Order {
             }
         }
 
+        $line_items = $this->describe_line_items( $order, $shipments );
+
+        // The next box: for a fulfillment the fish are on the source orders.
+        $box_items = $line_items;
+        if ( $is_fulfillment && ! empty( $source_orders ) ) {
+            $box_items = array();
+            foreach ( $source_orders as $source_order ) {
+                $box_items = array_merge( $box_items, $source_order['line_items'] );
+            }
+        }
+        $weather_action = FST_Supplies::order_pack_action( $order );
+        $fish_count     = $this->open_fish_count( $order, $box_items );
+
         return array(
-            'order'         => array(
+            'order'             => array(
                 'id'               => $order->get_id(),
                 'number'           => (string) $order->get_order_number(),
                 'status'           => $order->get_status(),
                 'is_fulfillment'   => $is_fulfillment,
                 'source_order_ids' => $source_order_ids,
             ),
-            'line_items'    => $this->describe_line_items( $order, $shipments ),
-            'fully_shipped' => $is_fulfillment ? null : $this->is_order_fully_shipped( $order ),
-            'shipments'     => array_map( array( $this, 'summarize_shipment' ), (array) $shipments ),
-            'source_orders' => $source_orders,
+            'line_items'        => $line_items,
+            'fully_shipped'     => $is_fulfillment ? null : $this->is_order_fully_shipped( $order ),
+            'shipments'         => array_map( array( $this, 'summarize_shipment' ), (array) $shipments ),
+            'source_orders'     => $source_orders,
+            'ship_mode'         => FST_Ship_Mode::describe( $order ),
+            'weather_action'    => $weather_action,
+            'fish_count'        => $fish_count,
+            'default_materials' => FST_Supplies::get_default_materials( $fish_count, $weather_action ),
+        );
+    }
+
+    /**
+     * How many fish the next box of an order is taken to hold: the
+     * quantities of the items that are not in a box yet — all of them when
+     * none or every one is. Runs through the same `fst_box_fish_count`
+     * filter as FST_Supplies::fish_count().
+     *
+     * @param WC_Order $order
+     * @param array    $line_items describe_line_items() rows.
+     * @return int|float
+     */
+    private function open_fish_count( $order, array $line_items ) {
+        $open = 0;
+        $all  = 0;
+        foreach ( $line_items as $line_item ) {
+            $all += $line_item['quantity'];
+            if ( ! $line_item['covered'] ) {
+                $open += $line_item['quantity'];
+            }
+        }
+
+        $count = apply_filters( 'fst_box_fish_count', $open > 0 ? $open : $all, $order, null );
+
+        return is_numeric( $count ) ? max( 0, $count + 0 ) : 0;
+    }
+
+    /**
+     * Record the usual materials of a standard box on a box that has none
+     * yet. A custom size records nothing: there is no "usual".
+     *
+     * @param string   $tracking_number
+     * @param mixed    $raw_box    `box_dims` as sent — the name of a standard box picks that box
+     *                             even when another saved box has the same size.
+     * @param string   $dims       The normalised size.
+     * @param int      $fish_count Fish in the box.
+     * @param WC_Order $order      The order the tracking was added to (its weather action is used).
+     */
+    private function record_default_materials( $tracking_number, $raw_box, $dims, $fish_count, $order ) {
+        if ( null !== FST_Supplies::get_box_materials( $tracking_number ) ) {
+            return;
+        }
+
+        $boxes = FST_Settings::get_standard_boxes();
+        $box   = is_scalar( $raw_box ) ? FST_Supplies::standard_box_by_name( (string) $raw_box, $boxes ) : null;
+        if ( ! $box ) {
+            $box = FST_Supplies::standard_box_for_dims( $dims, $boxes );
+        }
+        if ( ! $box ) {
+            return;
+        }
+
+        FST_Supplies::set_box_materials( $tracking_number, FST_Supplies::default_materials(
+            $box,
+            FST_Supplies::get_supplies_raw(),
+            FST_Supplies::get_prices(),
+            $fish_count,
+            FST_Supplies::order_pack_action( $order )
+        ) );
+    }
+
+    /**
+     * An order that gets a label of its own is no longer a local pickup and
+     * no longer "in another order's box": the mark is removed, with any
+     * materials a local pickup carried, and a private note says so.
+     *
+     * @param WC_Order|false $order
+     */
+    private function end_ship_mode( $order ) {
+        if ( ! $order ) {
+            return;
+        }
+
+        $state = FST_Ship_Mode::get( $order );
+        if ( 'label' === $state['mode'] ) {
+            return;
+        }
+
+        FST_Ship_Mode::clear( $order );
+        FST_Supplies::clear_order_materials( $order->get_id() );
+
+        $order->add_order_note(
+            'local' === $state['mode']
+                ? 'ShipTracker: tracking was added, so this order is no longer marked as a local pickup.'
+                : sprintf( 'ShipTracker: tracking was added, so this order is no longer marked as gone in the box of order #%d.', $state['with_order_id'] ),
+            false
         );
     }
 
@@ -923,6 +1460,281 @@ class FST_Order {
     }
 
     /**
+     * Record or change what a box cost to ship — the service behind the
+     * fst_set_label_cost AJAX action and POST /fst/v1/shipment/{id}/cost.
+     *
+     * Acts on the BOX of the shipment (its tracking number), so it does not
+     * matter which of a shared box's rows is named.
+     *
+     * @param int   $shipment_id Any shipment row of the box.
+     * @param array $args        Any of label_cost, box_weight, box_dims, label_source.
+     *                           A key that is present with an empty value clears that
+     *                           field; a key that is absent leaves it as it is.
+     *                           Since 1.9.18 also `materials` (see add_tracking()): absent
+     *                           leaves the box's materials alone, null / '' removes them,
+     *                           and inside it `lines`, `foam_cost` and `paper_cost` are each
+     *                           left as recorded when absent. Nothing is defaulted here.
+     * @return array|WP_Error {
+     *     @type string      $message
+     *     @type int         $shipment_id
+     *     @type string      $tracking_number
+     *     @type string|null $label_cost      "18.40"; null = not recorded.
+     *     @type string|null $box_weight      Pounds, "11.00".
+     *     @type string|null $box_dims        "10x10x10".
+     *     @type string|null $label_source
+     *     @type bool        $shared_box      Other orders share this box.
+     *     @type int[]       $order_ids       Every order with a row for the box.
+     *     @type array|null  $materials       FST_Supplies record; null = none recorded.
+     *     @type string|null $materials_total "4.21"
+     *     @type string|null $total_cost      Label + materials; null while the label cost is not recorded.
+     * }
+     * Error codes: fst_shipment_not_found, fst_no_cost_fields,
+     * fst_invalid_label_cost, fst_invalid_box_weight, fst_invalid_box_dims,
+     * fst_invalid_materials, fst_unknown_supply, fst_cost_save_failed.
+     */
+    public function set_label_cost( $shipment_id, array $args ) {
+        $shipment = FST_Shipment::get( absint( $shipment_id ) );
+        if ( ! $shipment ) {
+            return new WP_Error( 'fst_shipment_not_found', 'Shipment not found.' );
+        }
+
+        $fields = FST_Label_Cost::normalize_fields( $args, true );
+        if ( is_wp_error( $fields ) ) {
+            return $fields;
+        }
+        $has_materials = array_key_exists( 'materials', $args );
+        if ( empty( $fields ) && ! $has_materials ) {
+            return new WP_Error( 'fst_no_cost_fields', 'Nothing to save: send label_cost, box_weight, box_dims, label_source or materials.' );
+        }
+
+        // Checked before anything is written, so a bad line changes nothing.
+        $materials = null;
+        if ( $has_materials ) {
+            $materials = FST_Supplies::normalize_materials(
+                $args['materials'],
+                FST_Supplies::get_supplies_raw(),
+                FST_Supplies::get_prices(),
+                FST_Supplies::get_box_materials( $shipment->tracking_number )
+            );
+            if ( is_wp_error( $materials ) ) {
+                return $materials;
+            }
+        }
+
+        if ( ! empty( $fields ) && ! FST_Shipment::set_box_cost( $shipment->tracking_number, $fields, (int) $shipment->id ) ) {
+            return new WP_Error( 'fst_cost_save_failed', 'Failed to save the label cost.' );
+        }
+
+        if ( $has_materials ) {
+            if ( null === $materials ) {
+                FST_Supplies::clear_box_materials( $shipment->tracking_number );
+            } else {
+                FST_Supplies::set_box_materials( $shipment->tracking_number, $materials );
+            }
+        }
+
+        $box = FST_Shipment::with_materials( FST_Shipment::get_box_cost( $shipment->tracking_number ) );
+
+        return array(
+            'message'         => 'Label cost saved.',
+            'shipment_id'     => (int) $shipment->id,
+            'tracking_number' => $shipment->tracking_number,
+            'label_cost'      => $box['label_cost'],
+            'box_weight'      => $box['box_weight'],
+            'box_dims'        => $box['box_dims'],
+            'label_source'    => $box['label_source'],
+            'shared_box'      => $box['shared_box'],
+            'order_ids'       => $box['order_ids'],
+            'materials'       => $box['materials'],
+            'materials_total' => $box['materials_total'],
+            'total_cost'      => $box['total_cost'],
+        );
+    }
+
+    /**
+     * Record how an order with no label of its own went out — the service
+     * behind the fst_set_ship_mode AJAX action and
+     * POST /fst/v1/order/{id}/ship-mode.
+     *
+     * `local`: a local pickup — a real label cost of zero; it may carry
+     * materials. `with_order`: the order went in another order's box, whose
+     * box or boxes then count this order's shipping paid against their
+     * cost. `label`: clear it — back to "no shipment yet".
+     *
+     * Only order meta changes (and, for a local pickup, its materials): no
+     * shipment row, no customer e-mail, no status change, no polling.
+     *
+     * @param int   $order_id
+     * @param array $args {
+     *     @type string $mode          label | local | with_order.
+     *     @type int    $with_order_id The order whose box it went in (with_order).
+     *     @type string $date          Optional Y-m-d — the day it went out. Left out: now for a new
+     *                                 mark; a mark that stays what it was keeps its day.
+     *     @type mixed  $materials     Optional, local only — see add_tracking(). Absent leaves
+     *                                 what is recorded; null / '' removes it.
+     * }
+     * @return array|WP_Error message, order_id and the FST_Ship_Mode::describe() keys: mode,
+     *                        with_order_id, with_order_number, date, materials, materials_total.
+     * Error codes: fst_order_not_found, fst_invalid_ship_mode,
+     * fst_order_has_shipments, fst_invalid_materials, fst_unknown_supply.
+     */
+    public function set_ship_mode( $order_id, array $args ) {
+        $order_id = absint( $order_id );
+        $order    = $order_id ? wc_get_order( $order_id ) : false;
+        if ( ! $order instanceof WC_Order ) {
+            return new WP_Error( 'fst_order_not_found', 'Order not found.' );
+        }
+
+        $normalized = FST_Ship_Mode::normalize_args( $args );
+        if ( is_wp_error( $normalized ) ) {
+            return $normalized;
+        }
+
+        if ( 'label' !== $normalized['mode'] ) {
+            $host       = 'with_order' === $normalized['mode'] ? wc_get_order( $normalized['with_order_id'] ) : false;
+            $host_state = $host instanceof WC_Order ? FST_Ship_Mode::get( $host ) : array( 'mode' => '' );
+
+            $allowed = FST_Ship_Mode::check( $normalized, array(
+                'order_id'      => $order_id,
+                'has_shipments' => ! empty( $this->get_effective_shipments( $order_id ) ),
+                'host_exists'   => $host instanceof WC_Order,
+                'host_mode'     => $host_state['mode'],
+                'has_riders'    => ! empty( FST_Ship_Mode::get_riders_of( $order_id ) ),
+            ) );
+            if ( is_wp_error( $allowed ) ) {
+                return $allowed;
+            }
+        }
+
+        // A local pickup's materials, checked before anything is written.
+        $has_materials = 'local' === $normalized['mode'] && array_key_exists( 'materials', $args );
+        $materials     = null;
+        if ( $has_materials ) {
+            $materials = FST_Supplies::normalize_materials(
+                $args['materials'],
+                FST_Supplies::get_supplies_raw(),
+                FST_Supplies::get_prices(),
+                FST_Supplies::get_order_materials( $order_id )
+            );
+            if ( is_wp_error( $materials ) ) {
+                return $materials;
+            }
+        }
+
+        $before = FST_Ship_Mode::get( $order );
+        FST_Ship_Mode::write( $order, $normalized );
+
+        if ( 'local' !== $normalized['mode'] || ( $has_materials && null === $materials ) ) {
+            FST_Supplies::clear_order_materials( $order_id );
+        } elseif ( $has_materials ) {
+            FST_Supplies::set_order_materials( $order_id, $materials );
+        }
+
+        switch ( $normalized['mode'] ) {
+            case 'local':
+                $message = 'Marked as a local pickup.';
+                break;
+            case 'with_order':
+                $message = sprintf( 'Marked as gone in the box of order #%d.', $normalized['with_order_id'] );
+                break;
+            default:
+                $message = 'Cleared: no shipment yet.';
+                break;
+        }
+        if ( $before['mode'] !== $normalized['mode'] || $before['with_order_id'] !== ( $normalized['with_order_id'] ? $normalized['with_order_id'] : null ) ) {
+            $order->add_order_note( 'ShipTracker: ' . $message, false );
+        }
+
+        return array_merge(
+            array(
+                'message'  => $message,
+                'order_id' => $order_id,
+            ),
+            FST_Ship_Mode::describe( $order )
+        );
+    }
+
+    /**
+     * AJAX: record how an order with no label of its own went out.
+     *
+     * POST: nonce (fst_nonce), order_id, mode (label | local | with_order),
+     * with_order_id (for with_order), optional date (Y-m-d) and, for a local
+     * pickup, optional materials (array or JSON string). Same payload
+     * convention as ajax_add_tracking(): string error message / success data
+     * with `message`.
+     */
+    public function ajax_set_ship_mode() {
+        check_ajax_referer( 'fst_nonce', 'nonce' );
+
+        if ( ! current_user_can( 'manage_woocommerce' ) ) {
+            wp_send_json_error( 'Permission denied.' );
+        }
+
+        $order_id = isset( $_POST['order_id'] ) ? absint( $_POST['order_id'] ) : 0;
+        if ( ! $order_id ) {
+            wp_send_json_error( 'Order ID required.' );
+        }
+
+        $args = array();
+        foreach ( array( 'mode', 'with_order_id', 'date' ) as $field ) {
+            if ( isset( $_POST[ $field ] ) && is_scalar( $_POST[ $field ] ) ) {
+                $args[ $field ] = sanitize_text_field( wp_unslash( $_POST[ $field ] ) );
+            }
+        }
+        if ( isset( $_POST['materials'] ) ) {
+            $args['materials'] = wp_unslash( $_POST['materials'] ); // phpcs:ignore WordPress.Security -- validated by FST_Supplies::normalize_materials().
+        }
+
+        $result = $this->set_ship_mode( $order_id, $args );
+
+        if ( is_wp_error( $result ) ) {
+            wp_send_json_error( $result->get_error_message() );
+        }
+
+        wp_send_json_success( $result );
+    }
+
+    /**
+     * AJAX: record or change what a box cost to ship.
+     *
+     * POST: nonce (fst_nonce), shipment_id, and any of label_cost,
+     * box_weight, box_dims, label_source — an empty value clears that field,
+     * a field that is not posted is left alone — and/or materials (array or
+     * JSON string; not posted = left alone). Same payload convention as
+     * ajax_add_tracking(): string error message / success data with `message`.
+     */
+    public function ajax_set_label_cost() {
+        check_ajax_referer( 'fst_nonce', 'nonce' );
+
+        if ( ! current_user_can( 'manage_woocommerce' ) ) {
+            wp_send_json_error( 'Permission denied.' );
+        }
+
+        $shipment_id = isset( $_POST['shipment_id'] ) ? absint( $_POST['shipment_id'] ) : 0;
+        if ( ! $shipment_id ) {
+            wp_send_json_error( 'Shipment ID required.' );
+        }
+
+        $args = array();
+        foreach ( FST_Label_Cost::FIELDS as $field ) {
+            if ( isset( $_POST[ $field ] ) ) {
+                $args[ $field ] = wp_unslash( $_POST[ $field ] ); // phpcs:ignore WordPress.Security -- sanitised by FST_Label_Cost::normalize_fields().
+            }
+        }
+        if ( isset( $_POST['materials'] ) ) {
+            $args['materials'] = wp_unslash( $_POST['materials'] ); // phpcs:ignore WordPress.Security -- validated by FST_Supplies::normalize_materials().
+        }
+
+        $result = $this->set_label_cost( $shipment_id, $args );
+
+        if ( is_wp_error( $result ) ) {
+            wp_send_json_error( $result->get_error_message() );
+        }
+
+        wp_send_json_success( $result );
+    }
+
+    /**
      * AJAX: Remove tracking from an order.
      */
     public function ajax_remove_tracking() {
@@ -997,6 +1809,7 @@ class FST_Order {
         }
 
         $target_order_ids = $this->resolve_target_order_ids( $order_id );
+        $created_ids      = array();
 
         foreach ( $target_order_ids as $target_id ) {
             // Avoid duplicates on the same order — duplicates ACROSS source
@@ -1012,17 +1825,62 @@ class FST_Order {
             $source_order  = wc_get_order( $target_id );
             $all_item_ids  = $source_order ? array_keys( $source_order->get_items() ) : array();
 
-            FST_Shipment::create( array(
+            $created_id = FST_Shipment::create( array(
                 'order_id'        => $target_id,
                 'tracking_number' => $tracking_number,
                 'carrier'         => $carrier,
                 'line_item_ids'   => ! empty( $all_item_ids ) ? wp_json_encode( $all_item_ids ) : null,
             ) );
+            if ( $created_id ) {
+                $created_ids[] = $created_id;
+
+                // A label of its own ends "local pickup" / "went in another
+                // order's box" here too, as in add_tracking().
+                $this->end_ship_mode( $source_order );
+            }
 
             if ( $source_order && 'processing' === $source_order->get_status()
                  && $this->is_order_fully_shipped( $source_order ) ) {
                 $source_order->set_status( 'shipped', 'ShipTracker: all items now have tracking.' );
                 $source_order->save();
+            }
+        }
+
+        // The add form's optional cost fields, stored once for the box. This
+        // path cannot show an error, so values that do not validate are
+        // dropped — the cost can be added on the shipment afterwards.
+        if ( ! empty( $created_ids ) ) {
+            $box_size = isset( $_POST['fst_box_size'] ) ? sanitize_text_field( wp_unslash( $_POST['fst_box_size'] ) ) : 'custom';
+            $raw_cost = array(
+                'label_cost'   => isset( $_POST['fst_label_cost'] ) ? sanitize_text_field( wp_unslash( $_POST['fst_label_cost'] ) ) : '',
+                'box_weight'   => isset( $_POST['fst_box_weight'] ) ? sanitize_text_field( wp_unslash( $_POST['fst_box_weight'] ) ) : '',
+                'box_dims'     => 'custom' === $box_size
+                    ? ( isset( $_POST['fst_box_dims'] ) ? sanitize_text_field( wp_unslash( $_POST['fst_box_dims'] ) ) : '' )
+                    : $box_size,
+                'label_source' => isset( $_POST['fst_label_source'] ) ? sanitize_text_field( wp_unslash( $_POST['fst_label_source'] ) ) : '',
+            );
+
+            $cost_fields = array();
+            foreach ( $raw_cost as $field => $value ) {
+                $parsed = FST_Label_Cost::normalize_fields( array( $field => $value ), true );
+                if ( ! is_wp_error( $parsed ) && null !== $parsed[ $field ] ) {
+                    $cost_fields[ $field ] = $parsed[ $field ];
+                }
+            }
+            if ( ! empty( $cost_fields ) ) {
+                FST_Shipment::set_box_cost( $tracking_number, $cost_fields, $created_ids[0] );
+            }
+
+            // A standard box records its usual materials, as the AJAX path does.
+            if ( isset( $cost_fields['box_dims'] ) ) {
+                $fish_count = 0;
+                foreach ( $created_ids as $created_id ) {
+                    $created = FST_Shipment::get( $created_id );
+                    if ( $created ) {
+                        $fish_count += FST_Supplies::fish_count( wc_get_order( $created->order_id ) );
+                    }
+                }
+                $this->record_default_materials( $tracking_number, '', $cost_fields['box_dims'], $fish_count, wc_get_order( $order_id ) );
             }
         }
     }

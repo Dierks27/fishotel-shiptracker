@@ -474,3 +474,21 @@
 		grid-template-columns: 1fr;
 	}
 }
+
+/* Shipments on a tablet: the page never scrolls sideways. Below 900px
+   the Carrier and Last Checked columns step aside (both are on the
+   shipment itself), and the rest scrolls in its own box if it must. */
+@media (max-width: 900px) {
+	.fst-shipments-table {
+		display: block;
+		overflow-x: auto;
+		max-width: 100%;
+	}
+
+	.fst-shipments-table > thead > tr > th:nth-child(3),
+	.fst-shipments-table > thead > tr > th:nth-child(7),
+	.fst-shipments-table > tbody > tr > td:nth-child(3):not([colspan]),
+	.fst-shipments-table > tbody > tr > td:nth-child(7) {
+		display: none;
+	}
+}
