@@ -4,7 +4,7 @@
  * with every USPS HTTP call mocked and outgoing mail captured.
  *
  * THROWAWAY SITES ONLY — creates orders and changes ShipTracker settings.
- *   wp eval-file wp-content/plugins/fishotel-shiptracker/tests/e2e-letters.php
+ *   wp eval-file wp-content/plugins/fishotel-shiptracker/tests/letters-e2e-wp.php
  */
 
 if ( ! defined( 'ABSPATH' ) || 'cli' !== PHP_SAPI || ! defined( 'WP_CLI' ) ) {
@@ -302,5 +302,26 @@ $tracker->process_status_change_external( FST_Shipment::get( $pkg_id ), 'in_tran
 e2e( 1 === e2e_mail_count( 'customer@example.com', 'is out for delivery' ), 'package OFD email still uses the package template' );
 
 e2e( 'addr-token' === get_transient( 'fst_usps_addresses_token' ) && false === get_transient( 'fst_usps_access_token' ), 'address validation uses its own token cache; package USPS token untouched' );
+
+// ---------------------------------------------------------------------------
+// 8. Box costs / supplies / ship mode (1.9.17–1.9.18) don't treat letters as boxes.
+// ---------------------------------------------------------------------------
+if ( method_exists( 'FST_Shipment', 'get_cost_report_rows' ) ) {
+    $report       = FST_Shipment::get_cost_report_rows();
+    $report_carriers = array_unique( wp_list_pluck( $report['rows'], 'carrier' ) );
+    $letter_imbs  = $GLOBALS['wpdb']->get_col( "SELECT imb FROM {$GLOBALS['wpdb']->prefix}fst_letters" );
+    e2e( ! array_intersect( $letter_imbs, $report['tracking_numbers'] ) && ! in_array( 'usps_letter', $report_carriers, true ), 'letters are not boxes in the Box Costs report' );
+    e2e( in_array( '1Z999AA10123456784', $report['tracking_numbers'], true ), 'package boxes still in the Box Costs report' );
+}
+if ( method_exists( FST()->order, 'set_ship_mode' ) ) {
+    $sm_order = e2e_order();
+    $sm_letter = FST_Letters::get_or_create_for_order( $sm_order );
+    $sm = FST()->order->set_ship_mode( $sm_order->get_id(), array( 'mode' => 'local' ) );
+    e2e( ! is_wp_error( $sm ), 'an order whose only shipment is a sticker letter can still be marked Local pickup' . ( is_wp_error( $sm ) ? ': ' . $sm->get_error_message() : '' ) );
+    $box_order = e2e_order( '11955 Champlin Dr', false );
+    FST_Shipment::create( array( 'order_id' => $box_order->get_id(), 'tracking_number' => '1ZBOXONLY000001', 'carrier' => 'ups', 'status' => 'in_transit' ) );
+    $sm2 = FST()->order->set_ship_mode( $box_order->get_id(), array( 'mode' => 'local' ) );
+    e2e( is_wp_error( $sm2 ) && 'fst_order_has_shipments' === $sm2->get_error_code(), 'an order with a real box label is still blocked from Local pickup' );
+}
 
 echo $GLOBALS['e2e_fail'] ? "\n{$GLOBALS['e2e_fail']} FAILED\n" : "\nALL PASSED\n";

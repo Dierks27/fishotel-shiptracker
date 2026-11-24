@@ -66,6 +66,20 @@ $avg_by_carrier   = FST_Shipment::avg_delivery_days_by_carrier( $date_from, $dat
 $shipments_range  = FST_Shipment::count_per_day( $date_from, $date_to );
 $deliveries_range = FST_Shipment::deliveries_per_day( $date_from, $date_to );
 
+// Box costs: what the boxes in this range cost — label + materials — against
+// what customers paid, plus the supplies figures of the range.
+$cost_report  = FST_Label_Cost::get_report( $date_from, $date_to );
+$cost_summary = $cost_report['summary'];
+$cost_parts   = array(
+    'label' => __( 'Label', 'fishotel-shiptracker' ),
+    'boxes' => __( 'Boxes', 'fishotel-shiptracker' ),
+    'foam'  => __( 'Foam', 'fishotel-shiptracker' ),
+    'paper' => __( 'Paper', 'fishotel-shiptracker' ),
+    'bags'  => __( 'Bags', 'fishotel-shiptracker' ),
+    'packs' => __( 'Packs', 'fishotel-shiptracker' ),
+    'other' => __( 'Other', 'fishotel-shiptracker' ),
+);
+
 // Build daily data for the chart.
 $chart_from = $date_from ? $date_from : null;
 $chart_to   = $date_to ? $date_to : $today;
@@ -402,6 +416,448 @@ $page_url = admin_url( 'admin.php?page=fst-analytics' );
                 <p style="color: #999;"><?php esc_html_e( 'No delivered shipments with date data yet.', 'fishotel-shiptracker' ); ?></p>
             <?php endif; ?>
         </div>
+    </div>
+
+    <!-- Box Costs: label + materials -->
+    <?php
+    // Money cell: wc_price() markup, red when negative.
+    $fst_money = function ( $amount, $signed = false ) {
+        if ( null === $amount ) {
+            return '&mdash;';
+        }
+        $html = wp_kses_post( wc_price( (float) $amount ) );
+        if ( $signed ) {
+            $html = '<span style="font-weight: 600; color: ' . ( (float) $amount < 0 ? '#dc3545' : '#1e7e34' ) . ';">' . $html . '</span>';
+        }
+        return $html;
+    };
+    ?>
+    <div style="background: #fff; padding: 20px; border: 1px solid #ccd0d4; border-radius: 6px; margin-bottom: 20px;">
+        <h3 style="margin: 0 0 6px;"><?php esc_html_e( 'Box Costs', 'fishotel-shiptracker' ); ?></h3>
+        <p style="color: #666; font-size: 12px; margin: 0 0 4px; max-width: 900px;">
+            <?php esc_html_e( 'What the boxes cost you — the label plus the materials that went into them — against what customers paid for shipping, for boxes shipped in this date range (the last day included). "Shipping paid" is the order\'s shipping total before tax, less any shipping refunded. A box shared by several orders counts the shipping of all of them, an order that went in another order\'s box included; an order that went out in several boxes has its shipping split evenly between them, so it is counted once.', 'fishotel-shiptracker' ); ?>
+        </p>
+        <p style="font-size: 13px; margin: 0 0 16px; max-width: 900px;">
+            <strong>
+                <?php
+                printf(
+                    /* translators: %d: number of boxes */
+                    esc_html__( 'Boxes without a recorded label cost are left out of every total, average and difference below — %d in this range.', 'fishotel-shiptracker' ),
+                    (int) $cost_summary['boxes_without_cost']
+                );
+                ?>
+            </strong>
+            <?php if ( $cost_summary['boxes_without_cost'] > 0 ) : ?>
+                <?php
+                echo wp_kses_post( sprintf(
+                    /* translators: %s: amount customers paid for shipping */
+                    __( 'Customers paid %s shipping for those boxes. Add the costs on the orders, or import them under Settings &rarr; Boxes &amp; label costs.', 'fishotel-shiptracker' ),
+                    wc_price( (float) $cost_summary['paid_without_cost'] )
+                ) );
+                ?>
+                <?php if ( (float) $cost_report['materials']['without_label_cost'] > 0 ) : ?>
+                    <?php
+                    echo wp_kses_post( sprintf(
+                        /* translators: %s: materials recorded on boxes without a label cost */
+                        __( 'Their materials (%s) are left out here too, but are counted under Supplies below.', 'fishotel-shiptracker' ),
+                        wc_price( (float) $cost_report['materials']['without_label_cost'] )
+                    ) );
+                    ?>
+                <?php endif; ?>
+            <?php endif; ?>
+        </p>
+
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 20px;">
+            <div style="padding: 14px; border: 1px solid #eee; border-radius: 6px; text-align: center; background: #f9f9f9;">
+                <div style="font-size: 12px; color: #666; margin-bottom: 4px;"><?php esc_html_e( 'Boxes Shipped', 'fishotel-shiptracker' ); ?></div>
+                <div style="font-size: 24px; font-weight: 700; color: #0073aa;"><?php echo esc_html( $cost_summary['boxes'] ); ?></div>
+            </div>
+            <div style="padding: 14px; border: 1px solid #eee; border-radius: 6px; text-align: center; background: #f9f9f9;">
+                <div style="font-size: 12px; color: #666; margin-bottom: 4px;"><?php esc_html_e( 'With a Recorded Cost', 'fishotel-shiptracker' ); ?></div>
+                <div style="font-size: 24px; font-weight: 700; color: #1e7e34;"><?php echo esc_html( $cost_summary['boxes_with_cost'] ); ?></div>
+            </div>
+            <div style="padding: 14px; border: 1px solid #eee; border-radius: 6px; text-align: center; background: #f9f9f9;">
+                <div style="font-size: 12px; color: #666; margin-bottom: 4px;"><?php esc_html_e( 'Without a Cost', 'fishotel-shiptracker' ); ?></div>
+                <div style="font-size: 24px; font-weight: 700; color: <?php echo $cost_summary['boxes_without_cost'] > 0 ? '#b26b00' : '#1e7e34'; ?>;"><?php echo esc_html( $cost_summary['boxes_without_cost'] ); ?></div>
+            </div>
+            <div style="padding: 14px; border: 1px solid #eee; border-radius: 6px; text-align: center; background: #f9f9f9;">
+                <div style="font-size: 12px; color: #666; margin-bottom: 4px;"><?php esc_html_e( 'Total Cost (Label + Materials)', 'fishotel-shiptracker' ); ?></div>
+                <div style="font-size: 24px; font-weight: 700; color: #333;"><?php echo $fst_money( $cost_summary['total_cost'] ); // phpcs:ignore WordPress.Security.EscapeOutput -- wc_price() markup. ?></div>
+            </div>
+            <div style="padding: 14px; border: 1px solid #eee; border-radius: 6px; text-align: center; background: #f9f9f9;">
+                <div style="font-size: 12px; color: #666; margin-bottom: 4px;"><?php esc_html_e( 'Shipping Customers Paid', 'fishotel-shiptracker' ); ?></div>
+                <div style="font-size: 24px; font-weight: 700; color: #333;"><?php echo $fst_money( $cost_summary['total_paid'] ); // phpcs:ignore WordPress.Security.EscapeOutput -- wc_price() markup. ?></div>
+            </div>
+            <div style="padding: 14px; border: 1px solid #eee; border-radius: 6px; text-align: center; background: #f9f9f9;">
+                <div style="font-size: 12px; color: #666; margin-bottom: 4px;"><?php esc_html_e( 'Difference (Paid − Cost)', 'fishotel-shiptracker' ); ?></div>
+                <div style="font-size: 24px;"><?php echo $fst_money( $cost_summary['difference'], true ); // phpcs:ignore WordPress.Security.EscapeOutput -- wc_price() markup. ?></div>
+            </div>
+            <div style="padding: 14px; border: 1px solid #eee; border-radius: 6px; text-align: center; background: #f9f9f9;">
+                <div style="font-size: 12px; color: #666; margin-bottom: 4px;"><?php esc_html_e( 'Avg. Cost per Box', 'fishotel-shiptracker' ); ?></div>
+                <div style="font-size: 24px; font-weight: 700; color: #333;"><?php echo $fst_money( $cost_summary['avg_cost'] ); // phpcs:ignore WordPress.Security.EscapeOutput -- wc_price() markup. ?></div>
+            </div>
+        </div>
+
+        <?php if ( $cost_summary['boxes_with_cost'] > 0 ) : ?>
+            <!-- What the cost is made of: in total, by box size and by label source -->
+            <h4 style="margin: 0 0 4px;"><?php esc_html_e( 'What the Cost Is Made Of', 'fishotel-shiptracker' ); ?></h4>
+            <p style="color: #666; font-size: 12px; margin: 0 0 8px;">
+                <?php
+                printf(
+                    /* translators: 1: boxes with materials recorded, 2: boxes shipped */
+                    esc_html__( 'Label plus materials, as recorded on each box (%1$d of the %2$d boxes shipped have materials recorded; a box without any adds only its label). Packs are heat packs and ice packs.', 'fishotel-shiptracker' ),
+                    (int) $cost_report['materials']['boxes_with_materials'],
+                    (int) $cost_summary['boxes']
+                );
+                ?>
+            </p>
+            <table class="widefat striped" style="margin-bottom: 20px;">
+                <thead>
+                    <tr>
+                        <th></th>
+                        <th><?php esc_html_e( 'Boxes', 'fishotel-shiptracker' ); ?></th>
+                        <?php foreach ( $cost_parts as $part_label ) : ?>
+                            <th><?php echo esc_html( $part_label ); ?></th>
+                        <?php endforeach; ?>
+                        <th><?php esc_html_e( 'Total', 'fishotel-shiptracker' ); ?></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <?php
+                    $split_rows = array(
+                        array( 'label' => __( 'All boxes', 'fishotel-shiptracker' ), 'boxes' => $cost_summary['boxes_with_cost'], 'split' => $cost_report['split'], 'strong' => true ),
+                    );
+                    foreach ( $cost_report['by_size'] as $size_row ) {
+                        $split_rows[] = array( 'label' => $size_row['label'], 'boxes' => $size_row['boxes'], 'split' => $cost_report['split_by_size'][ $size_row['dims'] ], 'strong' => false );
+                    }
+                    foreach ( $cost_report['by_source'] as $source_row ) {
+                        $split_rows[] = array(
+                            /* translators: %s: label source */
+                            'label'  => sprintf( __( 'Bought through: %s', 'fishotel-shiptracker' ), $source_row['label'] ),
+                            'boxes'  => $source_row['boxes'],
+                            'split'  => $cost_report['split_by_source'][ $source_row['source'] ],
+                            'strong' => false,
+                        );
+                    }
+                    foreach ( $split_rows as $split_row ) :
+                        ?>
+                        <tr<?php echo $split_row['strong'] ? ' style="font-weight: 600;"' : ''; ?>>
+                            <td><?php echo esc_html( $split_row['label'] ); ?></td>
+                            <td><?php echo esc_html( $split_row['boxes'] ); ?></td>
+                            <?php foreach ( array_keys( $cost_parts ) as $part ) : ?>
+                                <td><?php echo $fst_money( $split_row['split'][ $part ] ); // phpcs:ignore WordPress.Security.EscapeOutput -- wc_price() markup. ?></td>
+                            <?php endforeach; ?>
+                            <td><?php echo $fst_money( $split_row['split']['total'] ); // phpcs:ignore WordPress.Security.EscapeOutput -- wc_price() markup. ?></td>
+                        </tr>
+                    <?php endforeach; ?>
+                </tbody>
+            </table>
+
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 20px;">
+                <!-- By box size -->
+                <div>
+                    <h4 style="margin: 0 0 8px;"><?php esc_html_e( 'By Box Size', 'fishotel-shiptracker' ); ?></h4>
+                    <table class="widefat striped">
+                        <thead>
+                            <tr>
+                                <th><?php esc_html_e( 'Box', 'fishotel-shiptracker' ); ?></th>
+                                <th><?php esc_html_e( 'Boxes', 'fishotel-shiptracker' ); ?></th>
+                                <th><?php esc_html_e( 'Avg. Cost', 'fishotel-shiptracker' ); ?></th>
+                                <th><?php esc_html_e( 'Avg. Shipping Paid', 'fishotel-shiptracker' ); ?></th>
+                                <th><?php esc_html_e( 'Avg. Difference', 'fishotel-shiptracker' ); ?></th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <?php foreach ( $cost_report['by_size'] as $size_row ) : ?>
+                                <tr>
+                                    <td><?php echo esc_html( $size_row['label'] ); ?></td>
+                                    <td><?php echo esc_html( $size_row['boxes'] ); ?></td>
+                                    <td><?php echo $fst_money( $size_row['avg_cost'] ); // phpcs:ignore WordPress.Security.EscapeOutput -- wc_price() markup. ?></td>
+                                    <td><?php echo $fst_money( $size_row['avg_paid'] ); // phpcs:ignore WordPress.Security.EscapeOutput -- wc_price() markup. ?></td>
+                                    <td><?php echo $fst_money( $size_row['avg_diff'], true ); // phpcs:ignore WordPress.Security.EscapeOutput -- wc_price() markup. ?></td>
+                                </tr>
+                            <?php endforeach; ?>
+                        </tbody>
+                    </table>
+                </div>
+
+                <!-- By label source -->
+                <div>
+                    <h4 style="margin: 0 0 8px;"><?php esc_html_e( 'By Label Source', 'fishotel-shiptracker' ); ?></h4>
+                    <table class="widefat striped">
+                        <thead>
+                            <tr>
+                                <th><?php esc_html_e( 'Bought Through', 'fishotel-shiptracker' ); ?></th>
+                                <th><?php esc_html_e( 'Boxes', 'fishotel-shiptracker' ); ?></th>
+                                <th><?php esc_html_e( 'Total Cost', 'fishotel-shiptracker' ); ?></th>
+                                <th><?php esc_html_e( 'Avg. Cost', 'fishotel-shiptracker' ); ?></th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <?php foreach ( $cost_report['by_source'] as $source_row ) : ?>
+                                <tr>
+                                    <td><?php echo esc_html( $source_row['label'] ); ?></td>
+                                    <td><?php echo esc_html( $source_row['boxes'] ); ?></td>
+                                    <td><?php echo $fst_money( $source_row['total_cost'] ); // phpcs:ignore WordPress.Security.EscapeOutput -- wc_price() markup. ?></td>
+                                    <td><?php echo $fst_money( $source_row['avg_cost'] ); // phpcs:ignore WordPress.Security.EscapeOutput -- wc_price() markup. ?></td>
+                                </tr>
+                            <?php endforeach; ?>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Average cost per box size, per source, side by side -->
+            <h4 style="margin: 0 0 4px;"><?php esc_html_e( 'Average Cost per Box Size, by Label Source', 'fishotel-shiptracker' ); ?></h4>
+            <p style="color: #666; font-size: 12px; margin: 0 0 8px;">
+                <?php esc_html_e( 'The cheaper source for each box size is highlighted. The number in brackets is how many boxes the average is made of — weights and destinations differ, so a couple of boxes is only a hint.', 'fishotel-shiptracker' ); ?>
+            </p>
+            <table class="widefat striped" style="margin-bottom: 20px;">
+                <thead>
+                    <tr>
+                        <th><?php esc_html_e( 'Box', 'fishotel-shiptracker' ); ?></th>
+                        <?php foreach ( $cost_report['size_by_source']['sources'] as $source_col ) : ?>
+                            <th><?php echo esc_html( $source_col['label'] ); ?></th>
+                        <?php endforeach; ?>
+                    </tr>
+                </thead>
+                <tbody>
+                    <?php foreach ( $cost_report['size_by_source']['rows'] as $matrix_row ) : ?>
+                        <tr>
+                            <td><?php echo esc_html( $matrix_row['label'] ); ?></td>
+                            <?php foreach ( $cost_report['size_by_source']['sources'] as $source_col ) :
+                                $cell        = isset( $matrix_row['cells'][ $source_col['source'] ] ) ? $matrix_row['cells'][ $source_col['source'] ] : null;
+                                $is_cheapest = null !== $matrix_row['cheapest'] && (string) $matrix_row['cheapest'] === $source_col['source'];
+                            ?>
+                                <td<?php echo $is_cheapest ? ' style="background: #e6f4ea; font-weight: 600;"' : ''; ?>>
+                                    <?php if ( $cell ) : ?>
+                                        <?php echo $fst_money( $cell['avg_cost'] ); // phpcs:ignore WordPress.Security.EscapeOutput -- wc_price() markup. ?>
+                                        <span style="color: #999; font-weight: 400;">(<?php echo esc_html( $cell['boxes'] ); ?>)</span>
+                                        <?php if ( $is_cheapest ) : ?>
+                                            <span style="color: #1e7e34; font-size: 11px;"><?php esc_html_e( 'cheaper', 'fishotel-shiptracker' ); ?></span>
+                                        <?php endif; ?>
+                                    <?php else : ?>
+                                        <span style="color: #999;">&mdash;</span>
+                                    <?php endif; ?>
+                                </td>
+                            <?php endforeach; ?>
+                        </tr>
+                    <?php endforeach; ?>
+                </tbody>
+            </table>
+
+            <!-- The boxes that lost the most -->
+            <h4 style="margin: 0 0 8px;"><?php esc_html_e( 'The 20 Boxes That Lost the Most', 'fishotel-shiptracker' ); ?></h4>
+            <?php if ( ! empty( $cost_report['losers'] ) ) : ?>
+                <table class="widefat striped">
+                    <thead>
+                        <tr>
+                            <th><?php esc_html_e( 'Order', 'fishotel-shiptracker' ); ?></th>
+                            <th><?php esc_html_e( 'Tracking #', 'fishotel-shiptracker' ); ?></th>
+                            <th><?php esc_html_e( 'Box', 'fishotel-shiptracker' ); ?></th>
+                            <th><?php esc_html_e( 'Bought Through', 'fishotel-shiptracker' ); ?></th>
+                            <th><?php esc_html_e( 'Label Cost', 'fishotel-shiptracker' ); ?></th>
+                            <th><?php esc_html_e( 'Materials', 'fishotel-shiptracker' ); ?></th>
+                            <th><?php esc_html_e( 'Shipping Paid', 'fishotel-shiptracker' ); ?></th>
+                            <th><?php esc_html_e( 'Difference', 'fishotel-shiptracker' ); ?></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <?php foreach ( $cost_report['losers'] as $loser ) : ?>
+                            <tr>
+                                <td>
+                                    <?php
+                                    $order_links = array();
+                                    foreach ( $loser['orders'] as $loser_order ) {
+                                        if ( $loser_order['missing'] || '' === $loser_order['url'] ) {
+                                            $order_links[] = '#' . esc_html( $loser_order['number'] ) . ' <span style="color: #999;">(' . esc_html__( 'order deleted', 'fishotel-shiptracker' ) . ')</span>';
+                                        } else {
+                                            $order_links[] = '<a href="' . esc_url( $loser_order['url'] ) . '">#' . esc_html( $loser_order['number'] ) . '</a>'
+                                                . ( $loser_order['rider'] ? ' <span style="color: #999;">(' . esc_html__( 'added to this box', 'fishotel-shiptracker' ) . ')</span>' : '' );
+                                        }
+                                    }
+                                    echo implode( ', ', $order_links ); // phpcs:ignore WordPress.Security.EscapeOutput -- each part escaped above.
+                                    ?>
+                                </td>
+                                <td><code><?php echo esc_html( $loser['tracking_number'] ); ?></code></td>
+                                <td><?php echo '' !== $loser['size_label'] ? esc_html( $loser['size_label'] ) : '&mdash;'; ?></td>
+                                <td><?php echo null !== $loser['label_source'] ? esc_html( $loser['label_source'] ) : '&mdash;'; ?></td>
+                                <td><?php echo $fst_money( $loser['label_cost'] ); // phpcs:ignore WordPress.Security.EscapeOutput -- wc_price() markup. ?></td>
+                                <td><?php echo $fst_money( $loser['materials_total'] ); // phpcs:ignore WordPress.Security.EscapeOutput -- wc_price() markup. ?></td>
+                                <td><?php echo $fst_money( $loser['paid'] ); // phpcs:ignore WordPress.Security.EscapeOutput -- wc_price() markup. ?></td>
+                                <td><?php echo $fst_money( $loser['difference'], true ); // phpcs:ignore WordPress.Security.EscapeOutput -- wc_price() markup. ?></td>
+                            </tr>
+                        <?php endforeach; ?>
+                    </tbody>
+                </table>
+            <?php else : ?>
+                <p style="color: #1e7e34;"><?php esc_html_e( 'No box in this range cost more than its customers paid for shipping.', 'fishotel-shiptracker' ); ?></p>
+            <?php endif; ?>
+        <?php else : ?>
+            <p style="color: #999; text-align: center; padding: 20px 0;"><?php esc_html_e( 'No label costs recorded for boxes in this date range yet.', 'fishotel-shiptracker' ); ?></p>
+        <?php endif; ?>
+
+        <!-- Free shipping, local pickups, orders in another order's box -->
+        <h4 style="margin: 20px 0 8px;"><?php esc_html_e( 'Free Shipping, Local Pickups and Shared Boxes', 'fishotel-shiptracker' ); ?></h4>
+        <table class="widefat striped" style="max-width: 900px;">
+            <tbody>
+                <tr>
+                    <td style="width: 220px;"><strong><?php esc_html_e( 'Free shipping given', 'fishotel-shiptracker' ); ?></strong></td>
+                    <td>
+                        <?php
+                        echo wp_kses_post( sprintf(
+                            /* translators: 1: number of orders, 2: what their boxes cost */
+                            _n(
+                                '%1$d order shipped with a label and paid nothing for shipping. It cost you %2$s (label + materials).',
+                                '%1$d orders shipped with a label and paid nothing for shipping. They cost you %2$s (label + materials).',
+                                (int) $cost_report['free_shipping']['orders'],
+                                'fishotel-shiptracker'
+                            ),
+                            (int) $cost_report['free_shipping']['orders'],
+                            wc_price( (float) $cost_report['free_shipping']['cost'] )
+                        ) );
+                        if ( $cost_report['free_shipping']['orders_without_cost'] > 0 ) {
+                            echo ' ';
+                            printf(
+                                /* translators: %d: number of orders */
+                                esc_html__( '%d of them are in a box without a recorded label cost, which is not in that amount.', 'fishotel-shiptracker' ),
+                                (int) $cost_report['free_shipping']['orders_without_cost']
+                            );
+                        }
+                        ?>
+                    </td>
+                </tr>
+                <tr>
+                    <td><strong><?php esc_html_e( 'Local pickups', 'fishotel-shiptracker' ); ?></strong></td>
+                    <td>
+                        <?php
+                        echo wp_kses_post( sprintf(
+                            /* translators: 1: number of orders, 2: materials used */
+                            _n(
+                                '%1$d order was picked up — no label. Materials used: %2$s.',
+                                '%1$d orders were picked up — no label. Materials used: %2$s.',
+                                (int) $cost_report['local_pickups']['orders'],
+                                'fishotel-shiptracker'
+                            ),
+                            (int) $cost_report['local_pickups']['orders'],
+                            wc_price( (float) $cost_report['local_pickups']['materials'] )
+                        ) );
+                        ?>
+                    </td>
+                </tr>
+                <tr>
+                    <td><strong><?php esc_html_e( 'Went in another order\'s box', 'fishotel-shiptracker' ); ?></strong></td>
+                    <td>
+                        <?php
+                        printf(
+                            /* translators: %d: number of orders */
+                            esc_html( _n(
+                                '%d order had no label of its own: it went in a box shipped in this range, and its shipping paid counts towards that box.',
+                                '%d orders had no label of their own: they went in boxes shipped in this range, and their shipping paid counts towards those boxes.',
+                                (int) $cost_report['in_other_box']['orders'],
+                                'fishotel-shiptracker'
+                            ) ),
+                            (int) $cost_report['in_other_box']['orders']
+                        );
+                        ?>
+                    </td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+
+    <!-- Supplies -->
+    <div style="background: #fff; padding: 20px; border: 1px solid #ccd0d4; border-radius: 6px; margin-bottom: 20px;">
+        <h3 style="margin: 0 0 6px;"><?php esc_html_e( 'Supplies', 'fishotel-shiptracker' ); ?></h3>
+        <p style="color: #666; font-size: 12px; margin: 0 0 12px; max-width: 900px;">
+            <?php esc_html_e( 'Bought: purchases logged with a date in this range. Used: what went into the boxes shipped and the local pickups made in this range — every one of them, with or without a recorded label cost. On hand is now, not at the end of the range.', 'fishotel-shiptracker' ); ?>
+        </p>
+        <?php if ( ! empty( $cost_report['supplies']['rows'] ) ) : ?>
+            <table class="widefat striped" style="margin-bottom: 16px;">
+                <thead>
+                    <tr>
+                        <th><?php esc_html_e( 'Supply', 'fishotel-shiptracker' ); ?></th>
+                        <th><?php esc_html_e( 'Bought', 'fishotel-shiptracker' ); ?></th>
+                        <th><?php esc_html_e( 'Paid', 'fishotel-shiptracker' ); ?></th>
+                        <th><?php esc_html_e( 'Used', 'fishotel-shiptracker' ); ?></th>
+                        <th><?php esc_html_e( 'Cost of What Was Used', 'fishotel-shiptracker' ); ?></th>
+                        <th><?php esc_html_e( 'On Hand Now', 'fishotel-shiptracker' ); ?></th>
+                        <th><?php esc_html_e( 'Reorder At', 'fishotel-shiptracker' ); ?></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <?php foreach ( $cost_report['supplies']['rows'] as $supply_row ) : ?>
+                        <tr>
+                            <td>
+                                <?php echo esc_html( $supply_row['name'] ); ?>
+                                <?php if ( $supply_row['removed'] ) : ?>
+                                    <span style="color: #999;"><?php esc_html_e( '(no longer on the list)', 'fishotel-shiptracker' ); ?></span>
+                                <?php endif; ?>
+                            </td>
+                            <td><?php echo esc_html( FST_Label_Cost::trim_decimal( $supply_row['bought_qty'] ) . ' ' . $supply_row['unit'] ); ?></td>
+                            <td><?php echo $fst_money( $supply_row['bought_money'] ); // phpcs:ignore WordPress.Security.EscapeOutput -- wc_price() markup. ?></td>
+                            <td><?php echo esc_html( FST_Label_Cost::trim_decimal( $supply_row['used_qty'] ) . ' ' . $supply_row['unit'] ); ?></td>
+                            <td><?php echo $fst_money( $supply_row['used_money'] ); // phpcs:ignore WordPress.Security.EscapeOutput -- wc_price() markup. ?></td>
+                            <td>
+                                <?php if ( null === $supply_row['on_hand'] ) : ?>
+                                    <span style="color: #999;"><?php esc_html_e( 'not counted', 'fishotel-shiptracker' ); ?></span>
+                                <?php else : ?>
+                                    <strong><?php echo esc_html( FST_Label_Cost::trim_decimal( $supply_row['on_hand'] ) ); ?></strong>
+                                    <?php if ( $supply_row['recount_needed'] ) : ?>
+                                        <span style="color: #b26b00;"><?php esc_html_e( 'recount needed', 'fishotel-shiptracker' ); ?></span>
+                                    <?php endif; ?>
+                                <?php endif; ?>
+                            </td>
+                            <td>
+                                <?php if ( null === $supply_row['reorder_level'] ) : ?>
+                                    &mdash;
+                                <?php else : ?>
+                                    <?php echo esc_html( FST_Label_Cost::trim_decimal( $supply_row['reorder_level'] ) ); ?>
+                                    <?php if ( $supply_row['low'] ) : ?>
+                                        <span style="color: #dc3545; font-weight: 600;"><?php esc_html_e( 'reorder', 'fishotel-shiptracker' ); ?></span>
+                                    <?php endif; ?>
+                                <?php endif; ?>
+                            </td>
+                        </tr>
+                    <?php endforeach; ?>
+                </tbody>
+            </table>
+        <?php else : ?>
+            <p style="color: #999;"><?php esc_html_e( 'No supplies yet. Add them under Settings → Boxes & label costs.', 'fishotel-shiptracker' ); ?></p>
+        <?php endif; ?>
+
+        <h4 style="margin: 0 0 4px;"><?php esc_html_e( 'Foam and Paper: Bought Against Your Ballparks', 'fishotel-shiptracker' ); ?></h4>
+        <p style="color: #666; font-size: 12px; margin: 0 0 8px; max-width: 900px;">
+            <?php esc_html_e( 'Foam and paper are a flat amount per box. Over a long enough range the amounts should add up to about what you paid for foam and paper — if they are far apart, correct the foam or paper cost of your standard boxes.', 'fishotel-shiptracker' ); ?>
+        </p>
+        <table class="widefat striped" style="max-width: 900px;">
+            <thead>
+                <tr>
+                    <th></th>
+                    <th><?php esc_html_e( 'Bought in This Range', 'fishotel-shiptracker' ); ?></th>
+                    <th><?php esc_html_e( 'Per-Box Amounts Added Up', 'fishotel-shiptracker' ); ?></th>
+                    <th><?php esc_html_e( 'Boxes With an Amount', 'fishotel-shiptracker' ); ?></th>
+                </tr>
+            </thead>
+            <tbody>
+                <?php foreach ( array( 'foam' => __( 'Foam', 'fishotel-shiptracker' ), 'paper' => __( 'Paper', 'fishotel-shiptracker' ) ) as $ballpark_key => $ballpark_label ) :
+                    $ballpark = $cost_report['supplies']['ballparks'][ $ballpark_key ];
+                    ?>
+                    <tr>
+                        <td><strong><?php echo esc_html( $ballpark_label ); ?></strong></td>
+                        <td>
+                            <?php if ( null === $ballpark['supply'] ) : ?>
+                                <span style="color: #999;"><?php esc_html_e( 'no supply is marked for this yet', 'fishotel-shiptracker' ); ?></span>
+                            <?php else : ?>
+                                <?php echo $fst_money( $ballpark['bought_money'] ); // phpcs:ignore WordPress.Security.EscapeOutput -- wc_price() markup. ?>
+                            <?php endif; ?>
+                        </td>
+                        <td><?php echo $fst_money( $ballpark['ballpark'] ); // phpcs:ignore WordPress.Security.EscapeOutput -- wc_price() markup. ?></td>
+                        <td><?php echo esc_html( $ballpark['records'] ); ?></td>
+                    </tr>
+                <?php endforeach; ?>
+            </tbody>
+        </table>
     </div>
 
     <?php if ( $late_count > 0 ) : ?>

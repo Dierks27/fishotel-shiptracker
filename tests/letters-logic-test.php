@@ -4,10 +4,10 @@
  * IV-MTR scan normalization, opcode/phase → status mapping, "likely delivered"
  * timing, USPS Addresses API parsing, credential encryption, MID rules.
  *
- *   php tests/test-letters-logic.php
+ *   php tests/letters-logic-test.php
  */
 
-require __DIR__ . '/bootstrap.php';
+require __DIR__ . '/letters-bootstrap.php';
 require_once __DIR__ . '/../includes/carriers/class-fst-carrier.php';
 require_once __DIR__ . '/../includes/carriers/class-fst-carrier-usps-letter.php';
 require_once __DIR__ . '/../includes/letters/class-fst-ivmtr.php';

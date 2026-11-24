@@ -3,7 +3,7 @@
  * Serial allocation under concurrency — needs a MySQL/MariaDB server.
  *
  *   FST_TEST_DB_HOST=127.0.0.1 FST_TEST_DB_PORT=3306 FST_TEST_DB_USER=u \
- *   FST_TEST_DB_PASS=p FST_TEST_DB_NAME=scratch_db php tests/test-letters-serial.php
+ *   FST_TEST_DB_PASS=p FST_TEST_DB_NAME=scratch_db php tests/letters-serial-mysql.php
  *
  * Drops and recreates wp_options + wp_fst_letters in that database, so
  * point it at a scratch database, never a live site.
@@ -12,7 +12,7 @@
  * 50 times (1,000 "Print label" clicks at once), then checks every serial is unique.
  */
 
-require __DIR__ . '/bootstrap.php';
+require __DIR__ . '/letters-bootstrap.php';
 
 if ( ! function_exists( 'pcntl_fork' ) ) {
     fwrite( STDERR, "pcntl extension required\n" );

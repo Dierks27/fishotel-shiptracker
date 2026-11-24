@@ -1,209 +1,478 @@
 <?php
 /**
- * Minimal WordPress stand-ins so the letter classes can be unit-tested
- * from the CLI without a WordPress install.
+ * Shared set-up for the plain-PHP tests (tests/label-cost-*.php,
+ * tests/supplies-*.php, tests/ship-mode-test.php).
  *
- * DB-backed tests (serial allocation) need a MySQL/MariaDB server:
- *   FST_TEST_DB_HOST=127.0.0.1 FST_TEST_DB_PORT=3306 FST_TEST_DB_USER=... \
- *   FST_TEST_DB_PASS=... FST_TEST_DB_NAME=... php tests/test-letters-serial.php
+ * No WordPress, WooCommerce or MySQL: the WordPress functions the plugin
+ * classes touch are stubbed, `$wpdb` is an in-memory fake that understands
+ * the few query shapes FST_Shipment and FST_Supplies use, and WC_Order is a
+ * minimal double.
+ *
+ * @package FisHotel_ShipTracker
  */
 
 if ( 'cli' !== PHP_SAPI ) {
-    exit; // Command-line test only — never runs over HTTP.
+    echo "Run this from the command line.\n";
+    exit( 1 );
 }
 
-define( 'ABSPATH', __DIR__ . '/' );
-define( 'HOUR_IN_SECONDS', 3600 );
-define( 'DAY_IN_SECONDS', 86400 );
-define( 'MINUTE_IN_SECONDS', 60 );
-define( 'AUTH_KEY', 'test-auth-key' );
-define( 'SECURE_AUTH_SALT', 'test-salt' );
+// Satisfy the `defined( 'ABSPATH' ) || exit;` guards in the plugin files.
+define( 'ABSPATH', dirname( __DIR__ ) . '/' );
 
-date_default_timezone_set( 'UTC' );
+// ---------------------------------------------------------------------------
+// WordPress stubs.
+// ---------------------------------------------------------------------------
 
-$GLOBALS['fst_test_options'] = array();
-$GLOBALS['fst_test_log']     = array();
+/** @var array Options returned by get_option() during a test. */
+$fst_test_options = array();
+
+/** @var string What current_time( 'mysql' ) returns; tests move it forward. */
+$fst_test_now = '2026-11-02 09:00:00';
+
+/** @var array order id => WC_Order double returned by wc_get_order(). */
+$fst_test_orders = array();
+
+/** @var array filter name => callable( $value, ...$args ) run by apply_filters(). */
+$fst_test_filters = array();
+
+/** @var int What get_current_user_id() returns. */
+$fst_test_user_id = 7;
+
+function absint( $maybeint ) {
+    return abs( (int) $maybeint );
+}
+
+function sanitize_text_field( $str ) {
+    $str = (string) $str;
+    $str = strip_tags( $str );
+    $str = preg_replace( '/[\r\n\t ]+/', ' ', $str );
+    return trim( $str );
+}
+
+function get_option( $option, $default = false ) {
+    global $fst_test_options;
+    return array_key_exists( $option, $fst_test_options ) ? $fst_test_options[ $option ] : $default;
+}
+
+function __( $text, $domain = 'default' ) {
+    return $text;
+}
+
+function is_wp_error( $thing ) {
+    return $thing instanceof WP_Error;
+}
+
+function add_action() {
+    return true;
+}
+
+function add_filter() {
+    return true;
+}
+
+function wp_parse_args( $args, $defaults = array() ) {
+    return array_merge( $defaults, (array) $args );
+}
+
+function wp_json_encode( $data ) {
+    return json_encode( $data );
+}
+
+function current_time( $type ) {
+    global $fst_test_now;
+    return 'mysql' === $type ? $fst_test_now : substr( $fst_test_now, 0, 10 );
+}
+
+function wc_get_order( $order_id ) {
+    global $fst_test_orders;
+    return isset( $fst_test_orders[ (int) $order_id ] ) ? $fst_test_orders[ (int) $order_id ] : false;
+}
+
+/**
+ * The one shape the plugin uses: orders whose meta_key equals meta_value, as ids.
+ */
+function wc_get_orders( $args ) {
+    global $fst_test_orders;
+    $ids = array();
+    foreach ( $fst_test_orders as $order_id => $order ) {
+        if ( (string) $order->get_meta( $args['meta_key'] ) === (string) $args['meta_value'] ) {
+            $ids[] = $order_id;
+        }
+    }
+    return $ids;
+}
+
+function apply_filters( $hook, $value, ...$args ) {
+    global $fst_test_filters;
+    return isset( $fst_test_filters[ $hook ] ) ? call_user_func_array( $fst_test_filters[ $hook ], array_merge( array( $value ), $args ) ) : $value;
+}
+
+function get_current_user_id() {
+    global $fst_test_user_id;
+    return $fst_test_user_id;
+}
+
+function wp_unslash( $value ) {
+    return $value;
+}
+
+/**
+ * The order form's nonce: only the literal "valid" passes.
+ */
+function wp_verify_nonce( $nonce, $action = -1 ) {
+    return 'valid' === $nonce ? 1 : false;
+}
 
 class WP_Error {
     private $code;
     private $message;
+
     public function __construct( $code = '', $message = '' ) {
         $this->code    = $code;
         $this->message = $message;
     }
-    public function get_error_code() { return $this->code; }
-    public function get_error_message() { return $this->message; }
+
+    public function get_error_code() {
+        return $this->code;
+    }
+
+    public function get_error_message() {
+        return $this->message;
+    }
 }
 
-function is_wp_error( $v ) { return $v instanceof WP_Error; }
-function wp_json_encode( $v ) { return json_encode( $v ); }
-function current_time( $type ) { return 'timestamp' === $type ? time() : gmdate( 'Y-m-d H:i:s' ); }
-function wp_cache_delete() { return true; }
-function get_current_user_id() { return 1; }
-function wp_parse_args( $args, $defaults ) { return array_merge( $defaults, (array) $args ); }
-function sanitize_text_field( $s ) { return trim( strip_tags( (string) $s ) ); }
-function wc_get_logger() {
-    return new class() {
-        public function log( $level, $message, $context = array() ) {
-            $GLOBALS['fst_test_log'][] = "[$level] $message";
-        }
-    };
+// ---------------------------------------------------------------------------
+// WooCommerce doubles — just what FST_Order::add_tracking() calls.
+// ---------------------------------------------------------------------------
+
+class FST_Test_Order_Item {
+    private $quantity;
+
+    public function __construct( $quantity = 1 ) {
+        $this->quantity = $quantity;
+    }
+
+    public function get_name() {
+        return 'Item';
+    }
+
+    public function get_quantity() {
+        return $this->quantity;
+    }
 }
+
+class WC_Order {
+    private $id;
+    private $item_ids;
+    private $meta;
+    private $status;
+    public $notes = array();
+
+    /** @var array item id => quantity, for items that are not a single fish. */
+    public $quantities = array();
+
+    /** @var int How often save() ran. */
+    public $saves = 0;
+
+    public function __construct( $id, array $item_ids = array(), array $meta = array(), $status = 'processing' ) {
+        $this->id       = (int) $id;
+        $this->item_ids = $item_ids;
+        $this->meta     = $meta;
+        $this->status   = $status;
+    }
+
+    public function update_meta_data( $key, $value ) {
+        $this->meta[ $key ] = $value;
+    }
+
+    public function delete_meta_data( $key ) {
+        unset( $this->meta[ $key ] );
+    }
+
+    public function get_id() {
+        return $this->id;
+    }
+
+    public function get_order_number() {
+        return (string) $this->id;
+    }
+
+    public function get_meta( $key ) {
+        return isset( $this->meta[ $key ] ) ? $this->meta[ $key ] : '';
+    }
+
+    public function get_items() {
+        $items = array();
+        foreach ( $this->item_ids as $item_id ) {
+            $items[ $item_id ] = new FST_Test_Order_Item( isset( $this->quantities[ $item_id ] ) ? $this->quantities[ $item_id ] : 1 );
+        }
+        return $items;
+    }
+
+    public function get_status() {
+        return $this->status;
+    }
+
+    public function set_status( $status, $note = '' ) {
+        $this->status = $status;
+    }
+
+    public function add_order_note( $note, $is_customer_note = false ) {
+        $this->notes[] = $note;
+    }
+
+    public function save() {
+        $this->saves++;
+        return $this->id;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// In-memory $wpdb.
+// ---------------------------------------------------------------------------
 
 /**
- * Options: DB-backed when a $wpdb shim is connected, in-memory otherwise.
- */
-function get_option( $name, $default = false ) {
-    global $wpdb;
-    if ( $wpdb instanceof FST_Test_WPDB ) {
-        $v = $wpdb->get_var( $wpdb->prepare( "SELECT option_value FROM {$wpdb->options} WHERE option_name = %s", $name ) );
-        if ( null === $v ) {
-            return $default;
-        }
-        $u = @unserialize( $v );
-        return false !== $u || 'b:0;' === $v ? $u : $v;
-    }
-    return array_key_exists( $name, $GLOBALS['fst_test_options'] ) ? $GLOBALS['fst_test_options'][ $name ] : $default;
-}
-function add_option( $name, $value = '', $deprecated = '', $autoload = 'yes' ) {
-    global $wpdb;
-    if ( $wpdb instanceof FST_Test_WPDB ) {
-        $v = is_scalar( $value ) ? (string) $value : serialize( $value );
-        // INSERT IGNORE on the unique option_name — atomic like WordPress's add_option.
-        return 1 === $wpdb->query( $wpdb->prepare( "INSERT IGNORE INTO {$wpdb->options} (option_name, option_value, autoload) VALUES (%s, %s, %s)", $name, $v, $autoload ) );
-    }
-    if ( array_key_exists( $name, $GLOBALS['fst_test_options'] ) ) {
-        return false;
-    }
-    $GLOBALS['fst_test_options'][ $name ] = $value;
-    return true;
-}
-function update_option( $name, $value ) {
-    global $wpdb;
-    if ( $wpdb instanceof FST_Test_WPDB ) {
-        $v = is_scalar( $value ) ? (string) $value : serialize( $value );
-        $wpdb->query( $wpdb->prepare( "INSERT INTO {$wpdb->options} (option_name, option_value, autoload) VALUES (%s, %s, 'no') ON DUPLICATE KEY UPDATE option_value = VALUES(option_value)", $name, $v ) );
-        return true;
-    }
-    $GLOBALS['fst_test_options'][ $name ] = $value;
-    return true;
-}
-function delete_option( $name ) {
-    global $wpdb;
-    if ( $wpdb instanceof FST_Test_WPDB ) {
-        $wpdb->query( $wpdb->prepare( "DELETE FROM {$wpdb->options} WHERE option_name = %s", $name ) );
-        return true;
-    }
-    unset( $GLOBALS['fst_test_options'][ $name ] );
-    return true;
-}
-
-/**
- * Tiny mysqli-backed subset of wpdb (prepare/query/get_var/get_row/get_results/insert/update).
+ * Understands exactly what FST_Shipment and FST_Supplies need: insert /
+ * update / delete by column => value, `SELECT * FROM t [WHERE a = x [AND
+ * b = y]] [ORDER BY c ASC|DESC] [LIMIT n]`, and the stock sum `SELECT
+ * supply_id, SUM(col) AS total FROM t WHERE supply_id > 0 GROUP BY
+ * supply_id`. Any other query throws, so a test never passes on a query the
+ * fake silently ignored. Text is compared without regard to letter case,
+ * like MySQL's default collation.
  */
 class FST_Test_WPDB {
-    public $prefix  = 'wp_';
-    public $options = 'wp_options';
+    public $prefix    = 'wp_';
     public $insert_id = 0;
-    private $db;
 
-    public function __construct() {
-        $this->db = new mysqli(
-            getenv( 'FST_TEST_DB_HOST' ) ?: '127.0.0.1',
-            getenv( 'FST_TEST_DB_USER' ) ?: 'root',
-            getenv( 'FST_TEST_DB_PASS' ) ?: '',
-            (string) getenv( 'FST_TEST_DB_NAME' ),
-            (int) ( getenv( 'FST_TEST_DB_PORT' ) ?: 3306 )
-        );
-    }
+    /** @var string[] Every SELECT that ran, so a test can count them. */
+    public $queries = array();
+
+    /** @var array table => list of rows (column => value). */
+    public $tables = array();
+
+    /** Columns of wp_fst_shipments with their defaults, as in the activator. */
+    private $shipment_defaults = array(
+        'id'                  => 0,
+        'order_id'            => 0,
+        'tracking_number'     => '',
+        'carrier'             => 'ups',
+        'status'              => 'unknown',
+        'status_detail'       => null,
+        'ship_date'           => null,
+        'est_delivery'        => null,
+        'delivered_date'      => null,
+        'last_checked'        => null,
+        'last_event_at'       => null,
+        'tracking_data'       => null,
+        'line_item_ids'       => null,
+        'easypost_tracker_id' => '',
+        'tracker_provider'    => '',
+        'check_count'         => 0,
+        'label_cost'          => null,
+        'box_weight'          => null,
+        'box_dims'            => null,
+        'label_source'        => null,
+        'created_at'          => null,
+        'updated_at'          => null,
+    );
 
     public function prepare( $query, ...$args ) {
         if ( 1 === count( $args ) && is_array( $args[0] ) ) {
             $args = $args[0];
         }
-        $i  = 0;
-        $db = $this->db;
-        return preg_replace_callback( '/%%|%d|%s|%f/', function ( $m ) use ( &$i, $args, $db ) {
-            if ( '%%' === $m[0] ) {
-                return '%';
-            }
-            $v = $args[ $i++ ];
-            if ( '%d' === $m[0] ) {
-                return (string) (int) $v;
-            }
-            if ( '%f' === $m[0] ) {
-                return (string) (float) $v;
-            }
-            return "'" . $db->real_escape_string( (string) $v ) . "'";
-        }, $query );
+        $n = 0;
+        return preg_replace_callback(
+            '/%[ds]/',
+            function ( $m ) use ( &$n, $args ) {
+                $value = $args[ $n ];
+                $n++;
+                return '%d' === $m[0] ? (string) (int) $value : "'" . addslashes( (string) $value ) . "'";
+            },
+            $query
+        );
     }
 
-    public function query( $sql ) {
-        $r = $this->db->query( $sql );
-        if ( false === $r ) {
-            throw new RuntimeException( $this->db->error . "\n" . $sql );
-        }
-        $this->insert_id = $this->db->insert_id;
-        return $r instanceof mysqli_result ? $r->num_rows : $this->db->affected_rows;
+    public function insert( $table, $data, $format = null ) {
+        $defaults = $table === $this->prefix . 'fst_shipments' ? $this->shipment_defaults : array( 'id' => 0 );
+
+        $this->insert_id++;
+        $row       = array_merge( $defaults, $data );
+        $row['id'] = $this->insert_id;
+
+        $this->tables[ $table ][] = $row;
+        return 1;
     }
 
-    public function get_results( $sql ) {
-        $r = $this->db->query( $sql );
-        if ( false === $r ) {
-            throw new RuntimeException( $this->db->error . "\n" . $sql );
+    public function update( $table, $data, $where ) {
+        $changed = 0;
+        if ( empty( $this->tables[ $table ] ) ) {
+            return 0;
         }
-        $rows = array();
-        while ( $o = $r->fetch_object() ) {
-            $rows[] = $o;
+        foreach ( $this->tables[ $table ] as $index => $row ) {
+            if ( $this->matches( $row, $where ) ) {
+                $this->tables[ $table ][ $index ] = array_merge( $row, $data );
+                $changed++;
+            }
         }
-        return $rows;
+        return $changed;
+    }
+
+    public function delete( $table, $where, $format = null ) {
+        $deleted = 0;
+        if ( empty( $this->tables[ $table ] ) ) {
+            return 0;
+        }
+        foreach ( $this->tables[ $table ] as $index => $row ) {
+            if ( $this->matches( $row, $where ) ) {
+                unset( $this->tables[ $table ][ $index ] );
+                $deleted++;
+            }
+        }
+        $this->tables[ $table ] = array_values( $this->tables[ $table ] );
+        return $deleted;
     }
 
     public function get_row( $sql ) {
         $rows = $this->get_results( $sql );
-        return $rows ? $rows[0] : null;
+        return empty( $rows ) ? null : $rows[0];
     }
 
-    public function get_var( $sql ) {
-        $r = $this->db->query( $sql );
-        if ( false === $r ) {
-            throw new RuntimeException( $this->db->error . "\n" . $sql );
+    public function get_results( $sql ) {
+        $sql = trim( preg_replace( '/\s+/', ' ', $sql ) );
+
+        // The stock sums: one row per supply.
+        if ( preg_match( '/^SELECT supply_id, SUM\((\w+)\) AS total FROM (\w+) WHERE supply_id > 0 GROUP BY supply_id$/', $sql, $m ) ) {
+            $this->queries[] = $sql;
+
+            $totals = array();
+            foreach ( isset( $this->tables[ $m[2] ] ) ? $this->tables[ $m[2] ] : array() as $row ) {
+                if ( (int) $row['supply_id'] > 0 ) {
+                    $totals[ (int) $row['supply_id'] ] = ( isset( $totals[ (int) $row['supply_id'] ] ) ? $totals[ (int) $row['supply_id'] ] : 0 ) + (float) $row[ $m[1] ];
+                }
+            }
+            $objects = array();
+            foreach ( $totals as $supply_id => $total ) {
+                $objects[] = (object) array( 'supply_id' => $supply_id, 'total' => number_format( $total, 2, '.', '' ) );
+            }
+            return $objects;
         }
-        $row = $r->fetch_row();
-        return $row ? $row[0] : null;
+
+        if ( ! preg_match( '/^SELECT \* FROM (\w+)(?: WHERE (.+?))?(?: ORDER BY (\w+) (ASC|DESC))?(?: LIMIT (\d+))?$/', $sql, $m ) ) {
+            throw new Exception( 'FST_Test_WPDB cannot run: ' . $sql );
+        }
+        $this->queries[] = $sql;
+
+        $where = array();
+        foreach ( isset( $m[2] ) && '' !== $m[2] ? explode( ' AND ', $m[2] ) : array() as $condition ) {
+            if ( ! preg_match( '/^(\w+) = (\d+|\'(?:[^\'\\\\]|\\\\.)*\')$/', trim( $condition ), $c ) ) {
+                throw new Exception( 'FST_Test_WPDB cannot run: ' . $sql );
+            }
+            $where[ $c[1] ] = "'" === $c[2][0] ? stripslashes( substr( $c[2], 1, -1 ) ) : (int) $c[2];
+        }
+
+        $rows = array();
+        foreach ( isset( $this->tables[ $m[1] ] ) ? $this->tables[ $m[1] ] : array() as $row ) {
+            if ( $this->matches( $row, $where ) ) {
+                $rows[] = $row;
+            }
+        }
+
+        if ( ! empty( $m[3] ) ) {
+            $column     = $m[3];
+            $descending = 'DESC' === $m[4];
+            usort(
+                $rows,
+                function ( $a, $b ) use ( $column, $descending ) {
+                    $order = is_numeric( $a[ $column ] ) && is_numeric( $b[ $column ] )
+                        ? $a[ $column ] - $b[ $column ]
+                        : strcmp( (string) $a[ $column ], (string) $b[ $column ] );
+                    if ( 0 === $order || 0.0 === $order ) {
+                        $order = $a['id'] - $b['id'];
+                    }
+                    return $descending ? -$order : $order;
+                }
+            );
+        }
+
+        if ( ! empty( $m[5] ) ) {
+            $rows = array_slice( $rows, 0, (int) $m[5] );
+        }
+
+        $objects = array();
+        foreach ( $rows as $row ) {
+            $objects[] = (object) $row;
+        }
+        return $objects;
     }
 
-    public function insert( $table, $data ) {
-        $cols = implode( ',', array_map( function ( $c ) { return "`$c`"; }, array_keys( $data ) ) );
-        $vals = implode( ',', array_map( function ( $v ) {
-            return null === $v ? 'NULL' : "'" . $this->db->real_escape_string( (string) $v ) . "'";
-        }, array_values( $data ) ) );
-        return $this->query( "INSERT INTO `$table` ($cols) VALUES ($vals)" );
+    /**
+     * A stored row, straight from the table (no query).
+     */
+    public function row( $table, $id ) {
+        foreach ( isset( $this->tables[ $table ] ) ? $this->tables[ $table ] : array() as $row ) {
+            if ( (int) $row['id'] === (int) $id ) {
+                return $row;
+            }
+        }
+        return null;
     }
 
-    public function update( $table, $data, $where ) {
-        $set = array();
-        foreach ( $data as $k => $v ) {
-            $set[] = "`$k` = " . ( null === $v ? 'NULL' : "'" . $this->db->real_escape_string( (string) $v ) . "'" );
+    private function matches( array $row, array $where ) {
+        foreach ( $where as $column => $value ) {
+            if ( ! array_key_exists( $column, $row ) || 0 !== strcasecmp( (string) $row[ $column ], (string) $value ) ) {
+                return false;
+            }
         }
-        $w = array();
-        foreach ( $where as $k => $v ) {
-            $w[] = "`$k` = '" . $this->db->real_escape_string( (string) $v ) . "'";
-        }
-        return $this->query( "UPDATE `$table` SET " . implode( ',', $set ) . ' WHERE ' . implode( ' AND ', $w ) );
+        return true;
     }
 }
 
-/** Assertion helper. */
-function fst_assert( $cond, $label ) {
-    global $fst_fail;
-    if ( $cond ) {
-        echo "PASS $label\n";
-    } else {
-        $fst_fail = ( $fst_fail ?? 0 ) + 1;
-        echo "FAIL $label\n";
+// ---------------------------------------------------------------------------
+// Tiny assertion harness.
+// ---------------------------------------------------------------------------
+
+$fst_test_passed = 0;
+$fst_test_failed = 0;
+
+function fst_assert_same( $expected, $actual, $label ) {
+    global $fst_test_passed, $fst_test_failed;
+    if ( $expected === $actual ) {
+        $fst_test_passed++;
+        echo "  ok   {$label}\n";
+        return;
     }
+    $fst_test_failed++;
+    echo "  FAIL {$label}\n";
+    echo '       expected: ' . var_export( $expected, true ) . "\n";
+    echo '       actual:   ' . var_export( $actual, true ) . "\n";
 }
 
-require_once __DIR__ . '/../includes/letters/class-fst-imb.php';
-require_once __DIR__ . '/../includes/letters/class-fst-letters.php';
+function fst_assert_error( $result, $expected_code, $label ) {
+    global $fst_test_failed;
+    if ( ! is_wp_error( $result ) ) {
+        $fst_test_failed++;
+        echo "  FAIL {$label}\n";
+        echo '       expected WP_Error ' . $expected_code . ', got: ' . var_export( $result, true ) . "\n";
+        return;
+    }
+    fst_assert_same( $expected_code, $result->get_error_code(), $label );
+}
+
+/**
+ * Print the totals and exit 0 (all passed) or 1.
+ */
+function fst_test_finish() {
+    global $fst_test_passed, $fst_test_failed;
+    echo "\n{$fst_test_passed} passed, {$fst_test_failed} failed\n";
+    exit( $fst_test_failed > 0 ? 1 : 0 );
+}
+
+require_once ABSPATH . 'includes/carriers/class-fst-carrier.php';
+require_once ABSPATH . 'includes/carriers/class-fst-carrier-ups.php';
+require_once ABSPATH . 'includes/carriers/class-fst-carrier-usps.php';
+require_once ABSPATH . 'includes/class-fst-label-cost.php';
+require_once ABSPATH . 'includes/class-fst-supplies.php';
+require_once ABSPATH . 'includes/class-fst-ship-mode.php';
+require_once ABSPATH . 'includes/class-fst-shipment.php';
+require_once ABSPATH . 'includes/class-fst-settings.php';
+require_once ABSPATH . 'includes/class-fst-order.php';

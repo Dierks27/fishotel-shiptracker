@@ -1,6 +1,6 @@
 <?php
 /**
- * IMb encoder test — run with: php tests/test-imb.php
+ * IMb encoder test — run with: php tests/letters-imb-test.php
  *
  * Vectors are the published examples from USPS-B-3200 (Intelligent Mail
  * Barcode 4-State Specification), Appendix: same tracking code with an

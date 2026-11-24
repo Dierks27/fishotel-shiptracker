@@ -1,0 +1,40 @@
+name: Lint
+
+# A version bump pushed to main reaches the live store through the GitHub
+# update checker (includes/class-fst-updater.php reads the raw header on
+# main), so a parse error or a hook pointing at a method that does not exist
+# reaches fishotel.com within hours.
+# This gate runs php -l on the PHP versions the server may run and the
+# plain-PHP tests (tests/*-test.php, no WordPress, no database).
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  php-lint:
+    name: PHP ${{ matrix.php }} syntax
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        php: ['7.4', '8.3']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          coverage: none
+      - name: php -l every tracked PHP file
+        run: |
+          set -e
+          git ls-files '*.php' | while read -r f; do php -l "$f" > /dev/null; done
+          echo "PHP syntax OK on $(php -r 'echo PHP_VERSION;')"
+      - name: Tests (PHP)
+        if: matrix.php == '8.3'
+        run: |
+          set -e
+          for t in $(git ls-files 'tests/*-test.php'); do
+            echo "== $t"; php "$t"
+          done
