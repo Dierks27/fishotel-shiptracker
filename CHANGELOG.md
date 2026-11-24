@@ -2,6 +2,24 @@
 
 All notable changes to FisHotel ShipTracker will be documented in this file.
 
+## [1.10.0]
+
+- **New shipment type: USPS Letter (`usps_letter`).** Tracks plain stamped First-Class letters with a uniquely serialized Intelligent Mail barcode (IMb) and USPS Informed Visibility (IV-MTR) scans. First use is FisHotel stickers mailed by letter (`_fishotel_sticker_mail_letter`), but any order can get a letter.
+- IMb encoder (`includes/letters/class-fst-imb.php`): pure PHP port of USPS-B-3200 with no bcmath/gmp. It matches all four Appendix C test vectors, and the settings tab shows a live self-test. Bars are drawn as SVG in physical inches and snapped to the printer's dot grid (203/300/600 dpi), staying within spec for width, pitch and height.
+- Serials: atomic `UPDATE … LAST_INSERT_ID()` counter on the `fst_letter_serial` option, plus a per-order create lock. A 1,000-way concurrency test produced 1,000 unique serials. The counter wraps to 1 and skips any serial used in the last 45 days. "Reset" refuses any value that would reuse a recent serial.
+- Address: USPS Addresses API v3 with the existing USPS client credentials, using its own `addresses`-scope token (`fst_usps_addresses_token`). The package tracking token and calls are unchanged. DPV-confirmed addresses get an 11-digit routing code. Anything else still prints with a 9- or 5-digit code and an "address not fully validated" warning on the order and label screen.
+- Order screen: new "USPS Letter Tracking" meta box with Print label, Reprint (same IMb), Mark mailed, Void & regenerate (new serial, logged) and Resend. The printable label defaults to 4×6 for the RX106HD, laid out landscape for a #10 envelope. Other layouts: 4×6 portrait, #10 envelope, or a custom size.
+- Tracking: IV-MTR REST API (BCG login, documented in the IV-MTR API Developer Toolkit v2.6.4). Polling only starts after "Test IV-MTR connection" passes on the live server. The first 5 raw responses are logged so the format can be checked. Scans are mapped by mail phase first, then by opcode (IV-MTR Operation Codes List v11.2), with overrides available in settings:
+  - origin → In Transit
+  - destination or carrier-route sort → Out for Delivery ("At local post office")
+  - final sort, then N hours with no scans → new **Likely Delivered** status
+  - letters never become "Delivered"
+- Flags (admin only): no scans 5 days after mailing; nothing delivery-type after 14 days, with a one-click "Resend". The first scan auto-marks an unmailed letter as mailed.
+- Letters have their own emails ("Your sticker is on its way!", "…should be in your mailbox") and never change the WooCommerce order status. Customers see a letter progress bar on My Account.
+- Package tracking is untouched. Letters are excluded from `get_due_for_poll()`, late shipments and package analytics, and `process_status_change()` hands letters off before any package logic runs.
+- New table `wp_fst_letters` (DB 1.3.0). Logging uses `wc_get_logger()` with source `shiptracker-letters`.
+- Tests in `tests/` (see `tests/README.md`).
+
 ## [1.9.14]
 
 - Fulfillment detection now uses the `_fishotel_is_fulfillment` post meta instead of `'fulfillment' === $order->get_status()`. The theme sets the meta to `'1'` on creation and it stays put, but the order status can be flipped past Fulfillment (Shipped, Processing after manual revert, Completed) — when that happened, `ajax_add_tracking` mis-classified the order as regular, rendered the picker for fulfillment items, and saved the shipment on the fulfillment row directly with empty `line_item_ids` instead of fanning out to source orders. Updated the three status-based checks in `class-fst-order.php` (meta-box picker render, `ajax_add_tracking` validation, and `resolve_target_order_ids` fan-out gate).

@@ -221,6 +221,8 @@ class FST_Order {
                 return new FST_Carrier_UPS();
             case 'usps':
                 return new FST_Carrier_USPS();
+            case 'usps_letter':
+                return new FST_Carrier_USPS_Letter();
             default:
                 return null;
         }

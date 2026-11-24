@@ -136,6 +136,15 @@ class FST_MyAccount {
         $step_order = array_keys( $progress_steps );
         $current_step_index = $this->get_progress_index( $status, $step_order );
 
+        // USPS letters: letter wording, no carrier link, never "Delivered".
+        if ( class_exists( 'FST_Letters' ) && FST_Letters::is_letter_shipment( $shipment ) ) {
+            $carrier            = 'USPS Letter';
+            $carrier_url        = '';
+            $progress_steps     = FST_Letters::progress_steps();
+            $step_order         = array_keys( $progress_steps );
+            $current_step_index = FST_Letters::progress_index( $status );
+        }
+
         ?>
         <div class="fst-shipment-card">
             <?php if ( $number > 0 ) : ?>

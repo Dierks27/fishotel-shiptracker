@@ -68,6 +68,7 @@ class FST_Activator {
         $charset_collate = $wpdb->get_charset_collate();
         $shipments_table = $wpdb->prefix . 'fst_shipments';
         $events_table    = $wpdb->prefix . 'fst_tracking_events';
+        $letters_table   = $wpdb->prefix . 'fst_letters';
 
         $sql = "CREATE TABLE {$shipments_table} (
             id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
@@ -111,6 +112,40 @@ class FST_Activator {
             KEY shipment_id (shipment_id),
             KEY status (status),
             KEY event_time (event_time)
+        ) {$charset_collate};
+
+        CREATE TABLE {$letters_table} (
+            id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
+            shipment_id bigint(20) unsigned NOT NULL DEFAULT 0,
+            order_id bigint(20) unsigned NOT NULL DEFAULT 0,
+            imb varchar(31) NOT NULL DEFAULT '',
+            tracking_code varchar(20) NOT NULL DEFAULT '',
+            routing_code varchar(11) NOT NULL DEFAULT '',
+            serial varchar(9) NOT NULL DEFAULT '',
+            contents varchar(50) NOT NULL DEFAULT 'letter',
+            recipient longtext,
+            address_status varchar(20) NOT NULL DEFAULT '',
+            address_message text,
+            label_printed_at datetime DEFAULT NULL,
+            print_count int(11) NOT NULL DEFAULT 0,
+            mailed_at datetime DEFAULT NULL,
+            first_scan_at datetime DEFAULT NULL,
+            last_scan_at datetime DEFAULT NULL,
+            scan_count int(11) NOT NULL DEFAULT 0,
+            flag varchar(20) NOT NULL DEFAULT '',
+            flagged_at datetime DEFAULT NULL,
+            flag_dismissed tinyint(1) NOT NULL DEFAULT 0,
+            state varchar(20) NOT NULL DEFAULT 'active',
+            replaces bigint(20) unsigned NOT NULL DEFAULT 0,
+            replaced_by bigint(20) unsigned NOT NULL DEFAULT 0,
+            created_at datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY  (id),
+            KEY shipment_id (shipment_id),
+            KEY order_id (order_id),
+            KEY imb (imb),
+            KEY tracking_code (tracking_code),
+            KEY state_flag (state,flag)
         ) {$charset_collate};";
 
         require_once ABSPATH . 'wp-admin/includes/upgrade.php';

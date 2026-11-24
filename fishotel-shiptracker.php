@@ -3,7 +3,7 @@
  * Plugin Name: FisHotel ShipTracker
  * Plugin URI: https://fishotel.com
  * Description: Self-hosted shipment tracking for WooCommerce. Tracks UPS & USPS packages, sends automated email notifications, and provides a branded tracking page for customers.
- * Version: 1.9.14
+ * Version: 1.10.0
  * Author: FisHotel
  * Author URI: https://fishotel.com
  * Text Domain: fishotel-shiptracker
@@ -19,8 +19,8 @@
 defined( 'ABSPATH' ) || exit;
 
 // Plugin constants
-define( 'FST_VERSION', '1.9.14' );
-define( 'FST_DB_VERSION', '1.2.0' );
+define( 'FST_VERSION', '1.10.0' );
+define( 'FST_DB_VERSION', '1.3.0' );
 define( 'FST_PLUGIN_FILE', __FILE__ );
 define( 'FST_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
 define( 'FST_PLUGIN_URL', plugin_dir_url( __FILE__ ) );
@@ -51,6 +51,12 @@ final class FisHotel_ShipTracker {
 
     /** @var FST_Pickup|null */
     public $pickup = null;
+
+    /** @var FST_Letters|null */
+    public $letters = null;
+
+    /** @var FST_Letters_Admin|null */
+    public $letters_admin = null;
 
     /**
      * Get the single instance.
@@ -118,6 +124,14 @@ final class FisHotel_ShipTracker {
         require_once FST_PLUGIN_DIR . 'includes/carriers/class-fst-carrier.php';
         require_once FST_PLUGIN_DIR . 'includes/carriers/class-fst-carrier-ups.php';
         require_once FST_PLUGIN_DIR . 'includes/carriers/class-fst-carrier-usps.php';
+        require_once FST_PLUGIN_DIR . 'includes/carriers/class-fst-carrier-usps-letter.php';
+
+        // USPS letters (Intelligent Mail barcode + IV-MTR).
+        require_once FST_PLUGIN_DIR . 'includes/letters/class-fst-imb.php';
+        require_once FST_PLUGIN_DIR . 'includes/letters/class-fst-letters.php';
+        require_once FST_PLUGIN_DIR . 'includes/letters/class-fst-letter-address.php';
+        require_once FST_PLUGIN_DIR . 'includes/letters/class-fst-ivmtr.php';
+        require_once FST_PLUGIN_DIR . 'includes/letters/class-fst-letters-admin.php';
 
         // Aggregators.
         require_once FST_PLUGIN_DIR . 'includes/class-fst-easypost.php';
@@ -134,6 +148,8 @@ final class FisHotel_ShipTracker {
         $this->myaccount = new FST_MyAccount();
         $this->checkout  = new FST_Checkout();
         $this->pickup    = new FST_Pickup();
+        $this->letters   = new FST_Letters();
+        $this->letters_admin = new FST_Letters_Admin();
 
         // REST API — FST_REST_API::register_routes() is called directly, no constructor hook.
         $rest_api = new FST_REST_API();

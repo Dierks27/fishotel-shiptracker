@@ -187,6 +187,7 @@ function fst_is_shipment_late( $shipment ) {
                     <option value=""><?php esc_html_e( 'All Carriers', 'fishotel-shiptracker' ); ?></option>
                     <option value="ups" <?php selected( $carrier_filter, 'ups' ); ?>>UPS</option>
                     <option value="usps" <?php selected( $carrier_filter, 'usps' ); ?>>USPS</option>
+                    <option value="usps_letter" <?php selected( $carrier_filter, 'usps_letter' ); ?>>USPS Letter</option>
                 </select>
             </div>
 

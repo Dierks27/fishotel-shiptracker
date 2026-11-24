@@ -59,6 +59,9 @@ class FST_Settings {
             case 'advanced':
                 $this->save_advanced_settings();
                 break;
+            case 'letters':
+                FST_Letters_Admin::save_settings();
+                break;
         }
 
         wp_safe_redirect( admin_url( 'admin.php?page=fst-settings&tab=' . $tab . '&updated=1' ) );
@@ -86,6 +89,14 @@ class FST_Settings {
                 </div>
             <?php } ?>
 
+            <?php
+            $letter_error = get_transient( 'fst_letter_settings_error' );
+            if ( $letter_error ) {
+                delete_transient( 'fst_letter_settings_error' );
+                echo '<div class="notice notice-error"><p>' . esc_html( $letter_error ) . '</p></div>';
+            }
+            ?>
+
             <nav class="nav-tab-wrapper fst-tabs">
                 <a href="#general" class="nav-tab <?php echo 'general' === $tab ? 'nav-tab-active' : ''; ?>">
                     <?php esc_html_e( 'General', 'fishotel-shiptracker' ); ?>
@@ -101,6 +112,9 @@ class FST_Settings {
                 </a>
                 <a href="#tracking_page" class="nav-tab <?php echo 'tracking_page' === $tab ? 'nav-tab-active' : ''; ?>">
                     <?php esc_html_e( 'Tracking Page', 'fishotel-shiptracker' ); ?>
+                </a>
+                <a href="#letters" class="nav-tab <?php echo 'letters' === $tab ? 'nav-tab-active' : ''; ?>">
+                    <?php esc_html_e( 'Letters', 'fishotel-shiptracker' ); ?>
                 </a>
                 <a href="#advanced" class="nav-tab <?php echo 'advanced' === $tab ? 'nav-tab-active' : ''; ?>">
                     <?php esc_html_e( 'Advanced', 'fishotel-shiptracker' ); ?>
@@ -132,6 +146,10 @@ class FST_Settings {
 
                 <div id="tracking_page" class="fst-tab-content <?php echo 'tracking_page' === $tab ? 'active' : ''; ?>">
                     <?php $this->render_tracking_page_tab(); ?>
+                </div>
+
+                <div id="letters" class="fst-tab-content <?php echo 'letters' === $tab ? 'active' : ''; ?>">
+                    <?php FST_Letters_Admin::render_settings_tab(); ?>
                 </div>
 
                 <div id="advanced" class="fst-tab-content <?php echo 'advanced' === $tab ? 'active' : ''; ?>">
