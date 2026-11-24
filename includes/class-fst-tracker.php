@@ -227,6 +227,12 @@ class FST_Tracker {
      * @param string $new_status
      */
     private function process_status_change( $shipment, $old_status, $new_status ) {
+        // USPS letters have their own emails and never move the order status.
+        if ( class_exists( 'FST_Letters' ) && FST_Letters::is_letter_shipment( $shipment ) ) {
+            FST_Letters::handle_status_change( $shipment, $old_status, $new_status );
+            return;
+        }
+
         $order = wc_get_order( $shipment->order_id );
         if ( ! $order ) {
             $this->log( sprintf( 'Order not found: %d', $shipment->order_id ) );
@@ -780,6 +786,7 @@ class FST_Tracker {
         switch ( $slug ) {
             case 'ups':  return new FST_Carrier_UPS();
             case 'usps': return new FST_Carrier_USPS();
+            case 'usps_letter': return new FST_Carrier_USPS_Letter();
             default:     return null;
         }
     }

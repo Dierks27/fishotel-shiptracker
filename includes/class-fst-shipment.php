@@ -45,6 +45,12 @@ class FST_Shipment {
     }
 
     /**
+     * Carrier slug for USPS letters. Letters are polled by FST_Letters and
+     * kept out of the package poll queue and package analytics.
+     */
+    const LETTER_CARRIER = 'usps_letter';
+
+    /**
      * Get shipments for an order.
      *
      * @param int $order_id
@@ -510,7 +516,8 @@ class FST_Shipment {
     public static function get_cost_report_rows( $date_from = '', $date_to = '' ) {
         global $wpdb;
 
-        $where  = "WHERE status NOT IN ('unknown','label_created')";
+        // USPS letters are stamped, not boxes: never in the box cost report.
+        $where  = "WHERE status NOT IN ('unknown','label_created') AND carrier != 'usps_letter'";
         $values = array();
 
         if ( $date_from ) {
@@ -568,6 +575,7 @@ class FST_Shipment {
                 "SELECT id, order_id, tracking_number, carrier, status, ship_date, label_cost, box_weight, box_dims, label_source
                  FROM " . self::table() . "
                  WHERE {$column} IN ({$placeholders})
+                 AND carrier != 'usps_letter'
                  ORDER BY id ASC",
                 ...$chunk
             ) );
@@ -665,6 +673,7 @@ class FST_Shipment {
             "SELECT * FROM " . self::table() . "
              WHERE status NOT IN ({$placeholders})
              AND ( tracker_provider IS NULL OR tracker_provider != 'easypost' )
+             AND carrier != 'usps_letter'
              AND (
                  last_checked IS NULL
                  OR (status = 'out_for_delivery' AND last_checked < DATE_SUB(%s, INTERVAL %d MINUTE))
@@ -699,6 +708,7 @@ class FST_Shipment {
              WHERE status NOT IN ({$placeholders})
              AND est_delivery IS NOT NULL
              AND est_delivery < %s
+             AND carrier != 'usps_letter'
              ORDER BY est_delivery ASC",
             ...$params
         ) );
@@ -727,7 +737,7 @@ class FST_Shipment {
     public static function count_by_status( $date_from = '', $date_to = '' ) {
         global $wpdb;
 
-        $where  = "WHERE status NOT IN ('unknown','label_created')";
+        $where  = "WHERE status NOT IN ('unknown','label_created') AND carrier != 'usps_letter'";
         $values = array();
 
         if ( $date_from ) {
@@ -840,7 +850,7 @@ class FST_Shipment {
     public static function count_by_carrier( $date_from = '', $date_to = '' ) {
         global $wpdb;
 
-        $where  = "WHERE status NOT IN ('unknown','label_created')";
+        $where  = "WHERE status NOT IN ('unknown','label_created') AND carrier != 'usps_letter'";
         $values = array();
 
         if ( $date_from ) {
@@ -886,6 +896,7 @@ class FST_Shipment {
             "SELECT DATE(ship_date) as date, COUNT(DISTINCT tracking_number) as count
              FROM " . self::table() . "
              WHERE status NOT IN ('unknown','label_created')
+             AND carrier != 'usps_letter'
              AND ship_date IS NOT NULL
              AND ship_date >= %s
              AND ship_date <= %s

@@ -48,6 +48,14 @@ class FST_Activator {
                 update_option( 'fst_easypost_backfill_pending', 'yes' );
             }
 
+            // DB 1.5.0 — USPS letters. create_tables() above added
+            // wp_fst_letters; seed the IMb serial counter as a non-autoloaded
+            // option (FST_Letters::next_serial() increments it atomically and
+            // must never read it from the alloptions cache).
+            if ( version_compare( $current_version, '1.5.0', '<' ) ) {
+                add_option( 'fst_letter_serial', '0', '', 'no' );
+            }
+
             update_option( 'fst_db_version', FST_DB_VERSION );
         }
 
@@ -69,6 +77,9 @@ class FST_Activator {
      * wp_fst_supply_purchases (the purchase log), wp_fst_supply_usage (the
      * materials of a box, keyed by tracking number — or by order for a local
      * pickup) and wp_fst_supply_counts (recount corrections).
+     *
+     * DB version 1.5.0 adds wp_fst_letters (USPS letters: one row per
+     * Intelligent Mail barcode issued, described in FST_Letters).
      */
     private static function create_tables() {
         global $wpdb;
@@ -79,6 +90,7 @@ class FST_Activator {
         $purchases_table = $wpdb->prefix . 'fst_supply_purchases';
         $usage_table     = $wpdb->prefix . 'fst_supply_usage';
         $counts_table    = $wpdb->prefix . 'fst_supply_counts';
+        $letters_table   = $wpdb->prefix . 'fst_letters';
 
         $sql = "CREATE TABLE {$shipments_table} (
             id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
@@ -169,6 +181,40 @@ class FST_Activator {
             user_id bigint(20) unsigned NOT NULL DEFAULT 0,
             PRIMARY KEY  (id),
             KEY supply_id (supply_id)
+        ) {$charset_collate};
+
+        CREATE TABLE {$letters_table} (
+            id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
+            shipment_id bigint(20) unsigned NOT NULL DEFAULT 0,
+            order_id bigint(20) unsigned NOT NULL DEFAULT 0,
+            imb varchar(31) NOT NULL DEFAULT '',
+            tracking_code varchar(20) NOT NULL DEFAULT '',
+            routing_code varchar(11) NOT NULL DEFAULT '',
+            serial varchar(9) NOT NULL DEFAULT '',
+            contents varchar(50) NOT NULL DEFAULT 'letter',
+            recipient longtext,
+            address_status varchar(20) NOT NULL DEFAULT '',
+            address_message text,
+            label_printed_at datetime DEFAULT NULL,
+            print_count int(11) NOT NULL DEFAULT 0,
+            mailed_at datetime DEFAULT NULL,
+            first_scan_at datetime DEFAULT NULL,
+            last_scan_at datetime DEFAULT NULL,
+            scan_count int(11) NOT NULL DEFAULT 0,
+            flag varchar(20) NOT NULL DEFAULT '',
+            flagged_at datetime DEFAULT NULL,
+            flag_dismissed tinyint(1) NOT NULL DEFAULT 0,
+            state varchar(20) NOT NULL DEFAULT 'active',
+            replaces bigint(20) unsigned NOT NULL DEFAULT 0,
+            replaced_by bigint(20) unsigned NOT NULL DEFAULT 0,
+            created_at datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY  (id),
+            KEY shipment_id (shipment_id),
+            KEY order_id (order_id),
+            KEY imb (imb),
+            KEY tracking_code (tracking_code),
+            KEY state_flag (state,flag)
         ) {$charset_collate};";
 
         require_once ABSPATH . 'wp-admin/includes/upgrade.php';

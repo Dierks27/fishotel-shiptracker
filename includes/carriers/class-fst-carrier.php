@@ -149,6 +149,7 @@ abstract class FST_Carrier {
             'available_for_pickup' => __( 'Available for Pickup', 'fishotel-shiptracker' ),
             'return_to_sender'     => __( 'Return to Sender', 'fishotel-shiptracker' ),
             'failure'              => __( 'Delivery Failed', 'fishotel-shiptracker' ),
+            'likely_delivered'     => __( 'Likely Delivered', 'fishotel-shiptracker' ),
         );
 
         return isset( $labels[ $status ] ) ? $labels[ $status ] : ucwords( str_replace( '_', ' ', $status ) );
@@ -172,6 +173,7 @@ abstract class FST_Carrier {
             'available_for_pickup' => '#9c27b0',
             'return_to_sender'     => '#e65100',
             'failure'              => '#c62828',
+            'likely_delivered'     => '#558b2f',
         );
 
         return isset( $colors[ $status ] ) ? $colors[ $status ] : '#999999';

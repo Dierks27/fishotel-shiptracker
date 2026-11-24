@@ -1,6 +1,6 @@
 # FisHotel ShipTracker - Project Overview & Instruction Manual
 
-**Version:** 1.9.18
+**Version:** 1.10.0
 **Author:** FisHotel
 **Type:** WordPress / WooCommerce Plugin (Proprietary)
 **Repository:** Dierks27/fishotel-shiptracker
@@ -24,6 +24,7 @@ Key capabilities:
 - Local pickups and orders that went in another order's box, recorded on the order without inventing a shipment
 - Migration tool for importing from AST/TrackShip plugins
 - Auto-updates from GitHub releases
+- **USPS Letter tracking**: stamped First-Class letters with an Intelligent Mail barcode (IMb), tracked through USPS IV-MTR scans
 
 ---
 
@@ -108,6 +109,14 @@ Leave fields blank to use built-in defaults. Use the **Send Test Email** button 
 Customize the customer-facing tracking display colors:
 - Background Color, Accent Color, Text Color
 - Custom CSS field for additional styling
+
+### Letters
+USPS letter tracking. The tab starts with a prerequisites checklist.
+- **Barcode** - Mailer ID (6 or 9 digits), CRID, Service Type ID (STID, required, no default; it's 310 in the Jan 2024 USPS STID table), Barcode ID (`00`), serial counter (read-only, with a safe reset), encoder self-test
+- **Label** - Return address, label size (4×6 landscape-on-envelope default / 4×6 portrait / #10 envelope / custom), printer dpi
+- **Timing** - "Likely delivered" delay (hours, default 24), no-scan flag (days, default 5), resend offer (days, default 14)
+- **Letter emails** - On/off and subject/body for Mailed, At local post office, Likely delivered; admin flag emails
+- **IV-MTR** - Access method (Off / IV-MTR API), BCG username and password (encrypted), Test IV-MTR connection, opcode overrides. These are BCG credentials, separate from the developers.usps.com client ID/secret.
 
 ### Advanced
 - **Polling Interval** - How often to check carriers for updates (seconds, minimum 300)
@@ -238,6 +247,16 @@ Kill switches (both default to ON):
 - Define `FST_FULFILLMENT_FANOUT_OFF` constant in wp-config.php to bypass fan-out — tracking lands on the fulfillment order_id directly.
 - Set the `fst_fulfillment_fanout_enabled` option to `'0'` for the same effect via the database.
 
+### USPS Letters (stickers by mail)
+1. On the order, the **USPS Letter Tracking** box appears. It's at the top for orders with `_fishotel_sticker_mail_letter`. Click **Print letter label**. This validates the address, assigns a serial, builds the IMb, creates a `usps_letter` shipment (Label Created) and opens the printable label.
+2. Print at 100% / actual size, stick the label on a #10 envelope, add a Forever stamp. The barcode is tracking only; the stamp pays postage.
+3. Click **Mark mailed** to set In Transit and send "Your sticker is on its way!". The first IV-MTR scan also marks the letter mailed automatically.
+4. Reprinting reuses the same IMb. **Void & regenerate** issues a new serial and logs it.
+5. IV-MTR scans move the letter to At local post office (Out for Delivery), then **Likely Delivered**. Letters have no delivery scan, so they are never marked "Delivered".
+6. Admin notices show letters with no scans after 5 days, and letters 14 days out with no delivery-type scan (with a one-click **Resend**).
+
+Logs: WooCommerce > Status > Logs, source `shiptracker-letters`.
+
 ### Monitoring Shipments
 - **Dashboard Widget** (wp-admin home) - Shows active shipment counts, exceptions, late alerts, and recently delivered orders at a glance, and — when a counted supply is at or under its reorder level — a "Time to reorder" notice with how many are on hand
 - **ShipTracker > Shipments** - Full list with clickable status cards to filter by In Transit, Out for Delivery, Exception, etc. Default sort is by Ship Date (newest first)
@@ -314,7 +333,7 @@ Customers receive branded HTML emails when their shipment status changes (based 
 ## Technical Architecture
 
 ### Database Tables
-The plugin creates five custom tables:
+The plugin creates six custom tables:
 
 **`wp_fst_shipments`** - Main shipment records
 - id, order_id, tracking_number, carrier, status, status_detail
@@ -326,6 +345,14 @@ The plugin creates five custom tables:
 - created_at, updated_at
 - Indexes on: order_id, tracking_number, status, carrier, last_checked, easypost_tracker_id, tracker_provider
 - Note: `tracking_number` is no longer globally unique — duplicates are allowed across DIFFERENT `order_id` values (combined-box fan-out). The same tracking_number+order_id pair is still rejected.
+
+**`wp_fst_letters`** (DB version 1.5.0) - Letter-only details, one row per IMb issued
+- shipment_id, order_id, imb, tracking_code (20), routing_code (0/5/9/11), serial, contents
+- recipient (JSON), address_status (validated/partial/unvalidated), address_message
+- label_printed_at, print_count, mailed_at, first_scan_at, last_scan_at, scan_count
+- flag (''/no_scan/stale), flagged_at, flag_dismissed, state (active/voided/resent), replaces, replaced_by
+
+Letter shipments are normal `wp_fst_shipments` rows with `carrier = 'usps_letter'` and the IMb as `tracking_number`. They are excluded from `get_due_for_poll()`, late shipments and package analytics; `FST_Letters::run_cron()` polls them on the same `fst_poll_shipments` action (priority 30).
 
 **`wp_fst_tracking_events`** - Individual tracking events per shipment
 - id, shipment_id, status, description, location, event_time, raw_data, created_at
@@ -373,14 +400,26 @@ fishotel-shiptracker/
 │   ├── class-fst-tracker.php        # Polling engine (cron-driven) + EasyPost poll/promote/backfill
 │   ├── class-fst-easypost.php       # EasyPost aggregator (trackers, webhook, signature, backfill)
 │   ├── class-fst-updater.php        # GitHub release auto-updater
+│   ├── letters/
+│   │   ├── class-fst-imb.php            # IMb encoder (USPS-B-3200) + SVG renderer
+│   │   ├── class-fst-letters.php        # Letter model: serials, create/void/resend, statuses, emails, cron, flags
+│   │   ├── class-fst-letter-address.php # USPS Addresses API v3 → routing code
+│   │   ├── class-fst-ivmtr.php          # IV-MTR API client (BCG login, piece lookup)
+│   │   └── class-fst-letters-admin.php  # Order meta box, AJAX, printable label, notices, Letters tab
 │   └── carriers/
 │       ├── class-fst-carrier.php      # Abstract carrier base class
 │       ├── class-fst-carrier-ups.php  # UPS API (OAuth 2.0 + tracking)
-│       └── class-fst-carrier-usps.php # USPS API (OAuth 2.0 + tracking)
+│       ├── class-fst-carrier-usps.php # USPS API (OAuth 2.0 + tracking)
+│       └── class-fst-carrier-usps-letter.php # USPS Letter: IV-MTR scans → statuses
 ├── assets/
 │   └── css/frontend.css             # Customer-facing styles
 └── tests/                           # Plain PHP, no WordPress: for t in tests/*-test.php; do php "$t" || break; done
     ├── bootstrap.php                # Stubs, in-memory $wpdb and WC_Order double for the tests
+    ├── letters-bootstrap.php        # Stubs + mysqli $wpdb shim for the letter tests
+    ├── letters-imb-test.php         # IMb encoder vs USPS-B-3200 test vectors; SVG bars within spec
+    ├── letters-logic-test.php       # IV-MTR scans → statuses, likely delivered, Addresses API parsing, MID/STID rules
+    ├── letters-serial-mysql.php     # By hand, scratch MySQL: 1,000 concurrent serials unique, wrap, 45-day skip, reset
+    ├── letters-e2e-wp.php           # By hand, throwaway WP + WooCommerce (wp eval-file): full letter lifecycle, USPS mocked
     ├── add-tracking-args-test.php   # FST_Order::normalize_add_tracking_args()
     ├── label-cost-args-test.php     # Money / weight / box-size spellings, standard box names, absent vs empty
     ├── label-cost-box-test.php      # One box, one cost: fan-out rows, removing the holding row
@@ -459,6 +498,7 @@ The `/easypost-webhook` endpoint has no WordPress capability check (`permission_
 | `exception` | No | Delivery exception occurred |
 | `return_to_sender` | Yes | Being returned to sender |
 | `failure` | Yes | Delivery permanently failed |
+| `likely_delivered` | Letters only | Final carrier-route sort + no scans for N hours. Letters are never marked `delivered`. |
 
 ### Auto-Update Mechanism
 The plugin checks GitHub for new releases every 6 hours (cached). To release a new version:

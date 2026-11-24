@@ -108,6 +108,7 @@ class FST_Order {
                                 }
                             }
                             ?>
+                            <?php if ( FST_Shipment::LETTER_CARRIER !== $shipment->carrier ) : // A stamped letter is not a box: no label cost or materials. ?>
                             <?php
                             // What this box cost to ship. Read by tracking number:
                             // the cost belongs to the box, not to this row.
@@ -134,6 +135,7 @@ class FST_Order {
                                 </button>
                                 <span class="fst-cost-message" style="margin-left: 6px; font-size: 12px;"></span>
                             </div>
+                            <?php endif; ?>
                             <div class="fst-shipment-actions">
                                 <a href="#" class="fst-recheck-btn" data-id="<?php echo esc_attr( $shipment->id ); ?>" title="Re-check status">
                                     &#x21bb; Re-check
@@ -526,6 +528,8 @@ class FST_Order {
                 return new FST_Carrier_UPS();
             case 'usps':
                 return new FST_Carrier_USPS();
+            case 'usps_letter':
+                return new FST_Carrier_USPS_Letter();
             default:
                 return null;
         }
@@ -1596,7 +1600,13 @@ class FST_Order {
 
             $allowed = FST_Ship_Mode::check( $normalized, array(
                 'order_id'      => $order_id,
-                'has_shipments' => ! empty( $this->get_effective_shipments( $order_id ) ),
+                // A stamped USPS letter (e.g. the sticker) is not "a label of its own".
+                'has_shipments' => ! empty( array_filter(
+                    $this->get_effective_shipments( $order_id ),
+                    static function ( $s ) {
+                        return FST_Shipment::LETTER_CARRIER !== $s->carrier;
+                    }
+                ) ),
                 'host_exists'   => $host instanceof WC_Order,
                 'host_mode'     => $host_state['mode'],
                 'has_riders'    => ! empty( FST_Ship_Mode::get_riders_of( $order_id ) ),
